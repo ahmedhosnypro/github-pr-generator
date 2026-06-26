@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub PR Generator",
+  "version": "1.2.0",
+  "description": "Generate GitHub PR title and description using an OpenAI-compatible API",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://github.com/*",
+    "http://localhost:20128/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://github.com/*/compare/*",
+        "https://github.com/*/pull/*/edit*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["config.local.json", "config.local.example.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
