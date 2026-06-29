@@ -6,7 +6,7 @@
 
   function log(level) {
     var args = Array.prototype.slice.call(arguments, 1);
-    var prefix = "[PR Generator v1.1]";
+    var prefix = "[PR Generator v1.5]";
     var msg = prefix + " " + args.map(function (a) {
       try { return typeof a === "object" ? JSON.stringify(a) : String(a); }
       catch (e) { return String(a); }
@@ -158,36 +158,43 @@
     tocItems.forEach((li) => {
       const link = li.querySelector('a[href^="#diff-"]');
       if (!link) return;
-      const path = link.textContent.trim();
+        const path = link.textContent.trim();
+        const diffAnchor = link.getAttribute("href") || "";
+        
+        // Validate anchor format: must be GitHub diff hash (e.g., #diff-abc123...)
+        var validDiffAnchor = /^#diff-[a-zA-Z0-9_-]{40,}$/.test(diffAnchor) ? diffAnchor : "";
+        if (diffAnchor && !validDiffAnchor) {
+          log("warn", "extractFileChanges - invalid diff anchor dropped: " + diffAnchor);
+        }
 
-      const added = li.querySelector(".octicon-diff-added");
-      const modified = li.querySelector(".octicon-diff-modified");
-      const removed = li.querySelector(".octicon-diff-removed");
-      const renamed = li.querySelector(".octicon-diff-renamed");
+        const added = li.querySelector(".octicon-diff-added");
+        const modified = li.querySelector(".octicon-diff-modified");
+        const removed = li.querySelector(".octicon-diff-removed");
+        const renamed = li.querySelector(".octicon-diff-renamed");
 
-      let type = "modified";
-      if (added) type = "added";
-      else if (removed) type = "removed";
-      else if (renamed) type = "renamed";
+        let type = "modified";
+        if (added) type = "added";
+        else if (removed) type = "removed";
+        else if (renamed) type = "renamed";
 
-      const successEl = li.querySelector(".color-fg-success");
-      const dangerEl = li.querySelector(".color-fg-danger");
+        const successEl = li.querySelector(".color-fg-success");
+        const dangerEl = li.querySelector(".color-fg-danger");
 
-      const additions = successEl
-        ? parseInt(successEl.textContent.replace("+", "").trim(), 10) || 0
-        : 0;
-      const deletions = dangerEl
-        ? parseInt(
-            dangerEl
-              .textContent
-              .replace("\u2212", "")
-              .replace("-", "")
-              .trim(),
-            10
-          ) || 0
-        : 0;
+        const additions = successEl
+          ? parseInt(successEl.textContent.replace("+", "").trim(), 10) || 0
+          : 0;
+        const deletions = dangerEl
+          ? parseInt(
+              dangerEl
+                .textContent
+                .replace("\u2212", "")
+                .replace("-", "")
+                .trim(),
+              10
+            ) || 0
+          : 0;
 
-      files.push({ path, type, additions, deletions });
+        files.push({ path, type, additions, deletions, diffAnchor: validDiffAnchor });
     });
 
     return files;
@@ -211,6 +218,91 @@
         ? parseInt(delMatch[1].replace(/,/g, ""), 10)
         : 0,
     };
+  }
+
+  function extractBranchContext() {
+    var url = window.location.href;
+    var pathParts = window.location.pathname.split("/").filter(function (p) { return p.length > 0; });
+    var owner = pathParts[0] || "";
+    var repo = pathParts[1] || "";
+    var baseBranch = "";
+    var headBranch = "";
+
+    var baseSelect = document.querySelector('select[name="pull_request[base]"]');
+    if (baseSelect) {
+      baseBranch = baseSelect.value || "";
+    }
+
+    var headInput = document.querySelector('input[name="pull_request[head]"]');
+    if (headInput) {
+      headBranch = headInput.value || "";
+    }
+
+    if (!baseBranch || !headBranch) {
+      var compareMatch = url.match(/\/compare\/([^?#\s]+?)(?:\?|$|\s)/);
+      if (compareMatch) {
+        var compareParts = compareMatch[1].split("...");
+        if (compareParts.length === 2) {
+          if (!baseBranch) baseBranch = compareParts[0];
+          if (!headBranch) headBranch = compareParts[1];
+        } else if (compareParts.length === 1 && !headBranch) {
+          headBranch = compareParts[0];
+        }
+      }
+    }
+
+    var branchNames = document.querySelectorAll(".branch-name");
+    if (branchNames.length >= 2) {
+      if (!baseBranch) baseBranch = branchNames[0].textContent.trim();
+      if (!headBranch) headBranch = branchNames[1].textContent.trim();
+    } else if (branchNames.length === 1 && !headBranch) {
+      headBranch = branchNames[0].textContent.trim();
+    }
+
+    var refNameElements = document.querySelectorAll(".ref-name");
+    if (refNameElements.length >= 2) {
+      if (!baseBranch) baseBranch = refNameElements[0].textContent.trim();
+      if (!headBranch) headBranch = refNameElements[1].textContent.trim();
+    } else if (refNameElements.length === 1 && !headBranch) {
+      headBranch = refNameElements[0].textContent.trim();
+    }
+
+    if (headBranch && headBranch.indexOf(":") !== -1) {
+      headBranch = headBranch.split(":").pop();
+    }
+
+    if (baseBranch && baseBranch.indexOf(":") !== -1) {
+      baseBranch = baseBranch.split(":").pop();
+    }
+
+    var result = { owner: owner, repo: repo, baseBranch: baseBranch, headBranch: headBranch };
+    log("info", "extractBranchContext - " + JSON.stringify(result));
+    return result;
+  }
+
+  function extractLinkedIssues(commits) {
+    var issues = {};
+    var allMessages = commits.map(function (c) { return c.message; }).join("\n");
+    var patterns = [
+      /(?:fixes|resolves|closes|fix|resolve|close|addresses|address|references|refs|see|related\s+to)\s+#(\d+)/gi,
+      /#([1-9]\d{2,})/g
+    ];
+    patterns.forEach(function (pat) {
+      var match;
+      while ((match = pat.exec(allMessages)) !== null) {
+        issues["#" + match[1]] = true;
+      }
+    });
+    var result = Object.keys(issues);
+    log("info", "extractLinkedIssues - found: " + result.join(", "));
+    return result;
+  }
+
+  function extractExistingBody() {
+    var textarea = document.querySelector("textarea#pull_request_body");
+    var value = textarea ? textarea.value || "" : "";
+    log("info", "extractExistingBody - length: " + value.length);
+    return value;
   }
 
   function setReactValue(element, value) {
@@ -343,7 +435,10 @@
       var commits = extractCommits();
       var fileChanges = extractFileChanges();
       var stats = extractStats();
-      log("info", "Extracted - commits: " + commits.length + ", files: " + fileChanges.length + ", stats: " + JSON.stringify(stats));
+      var branchContext = extractBranchContext();
+      var linkedIssues = extractLinkedIssues(commits);
+      var existingBody = extractExistingBody();
+      log("info", "Extracted - commits: " + commits.length + ", files: " + fileChanges.length + ", stats: " + JSON.stringify(stats) + ", branch: " + JSON.stringify(branchContext) + ", issues: " + linkedIssues.length);
 
       if (commits.length === 0 && fileChanges.length === 0) {
         log("error", "No commits or file changes found");
@@ -360,6 +455,9 @@
           }),
           fileChanges: fileChanges,
           stats: stats,
+          branchContext: branchContext,
+          linkedIssues: linkedIssues,
+          existingBody: existingBody,
         },
       });
       log("info", "Response from background: " + JSON.stringify(response));

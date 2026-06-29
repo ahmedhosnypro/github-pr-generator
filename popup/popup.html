@@ -86,6 +86,10 @@
     <label for="model">Model</label>
     <input type="text" id="model" placeholder="Set in config.local.json">
   </div>
+  <div class="field">
+    <label for="githubToken">GitHub PAT <span style="font-weight:normal;color:#656d76">(optional, for private repos & higher limits)</span></label>
+    <input type="password" id="githubToken" placeholder="GitHub PAT (optional)">
+  </div>
   <button class="save-btn" id="saveBtn">Save</button>
   <div class="saved-msg" id="savedMsg">Settings saved!</div>
   <script src="popup.js"></script>

@@ -1,1 +1,9 @@
-{"apiEndpoint":"http://localhost:20128/v1","apiKey":"sk-YOUR-API-KEY-HERE","model":"model_id"}
+{
+  "apiEndpoint": "http://localhost:20128/v1",
+  "apiKey": "sk-YOUR-API-KEY-HERE",
+  "diffEnabled": true,
+  "diffMaxBytes": 100000,
+  "diffMaxLines": 3000,
+  "githubToken": "",
+  "model": "model_id"
+}

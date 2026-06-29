@@ -4,3 +4,5 @@ node_modules/
 bun.lockb
 node_modules
 bun.lock
+
+.vscode
