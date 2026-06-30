@@ -86,6 +86,8 @@
 
   var BTN_ID = "ai-pr-generate-btn-title";
   var BTN_DESC_ID = "ai-pr-generate-btn-desc";
+  var BTN_OPENED_TITLE_ID = "ai-pr-generate-btn-opened-title";
+  var BTN_OPENED_DESC_ID = "ai-pr-generate-btn-opened-desc";
 
   function isPRCreationPage() {
     const url = window.location.href;
@@ -94,6 +96,52 @@
     const result = url.includes("github.com") && (url.includes("/compare/") || url.includes("/pull/")) && hasTitle && hasBody;
     log("info", "isPRCreationPage check - URL: " + url + ", hasTitle: " + hasTitle + ", hasBody: " + hasBody + ", result: " + result);
     return result;
+  }
+
+  function isPROpenedPage() {
+    var url = window.location.href;
+    if (!url.includes("github.com")) return false;
+    if (url.includes("/compare/") || /\/pull\/\d+\/edit/.test(url)) return false;
+    var prMatch = url.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/);
+    if (!prMatch) return false;
+    var pathParts = window.location.pathname.split("/").filter(function (p) { return p.length > 0; });
+    if (pathParts.length > 4) return false;
+    var hasTitle = !!document.querySelector('[data-component="PH_Title"] span.markdown-title');
+    var hasDesc = !!document.querySelector("div.js-comment-body");
+    log("info", "isPROpenedPage check - URL: " + url + ", hasTitle: " + hasTitle + ", hasDesc: " + hasDesc);
+    return hasTitle;
+  }
+
+  function extractOwnerRepoPRNumber() {
+    var pathParts = window.location.pathname.split("/").filter(function (p) { return p.length > 0; });
+    return {
+      owner: pathParts[0] || "",
+      repo: pathParts[1] || "",
+      prNumber: pathParts[3] || ""
+    };
+  }
+
+  function extractExistingOpenedTitle() {
+    var titleEls = document.querySelectorAll('[data-component="PH_Title"] span.markdown-title');
+    for (var i = 0; i < titleEls.length; i++) {
+      var el = titleEls[i];
+      if (el.closest("h1")) {
+        var val = el.textContent.trim();
+        log("info", "extractExistingOpenedTitle - " + val);
+        return val;
+      }
+    }
+    var fallback = titleEls.length > 0 ? titleEls[0].textContent.trim() : "";
+    log("info", "extractExistingOpenedTitle (fallback) - " + fallback);
+    return fallback;
+  }
+
+  function extractExistingOpenedDescription() {
+    var bodyEl = document.querySelector("div.js-command-palette-pull-body .js-comment-body");
+    if (!bodyEl) bodyEl = document.querySelector("div.js-comment-body");
+    var val = bodyEl ? bodyEl.innerText || "" : "";
+    log("info", "extractExistingOpenedDescription - length: " + val.length);
+    return val;
   }
 
   function extractCommitsFromEmbeddedJSON() {
@@ -528,9 +576,153 @@
     log("info", "Description button injected");
   }
 
+  function handleGenerateOpenedTitle() {
+    var btn = document.getElementById(BTN_OPENED_TITLE_ID);
+    if (!btn || btn.disabled) { log("warn", "Opened title button not found or disabled"); return; }
+    setButtonLoading(btn, true);
+    var openedDescBtn = document.getElementById(BTN_OPENED_DESC_ID);
+    if (openedDescBtn) setButtonLoading(openedDescBtn, true);
+
+    (async function () {
+      try {
+        var ctx = extractOwnerRepoPRNumber();
+        var existingTitle = extractExistingOpenedTitle();
+        var branchContext = extractBranchContext();
+        if (!ctx.owner || !ctx.repo || !ctx.prNumber) {
+          showToast("Could not determine PR owner/repo/number from URL.", true);
+          return;
+        }
+        log("info", "handleGenerateOpenedTitle - " + JSON.stringify(ctx));
+        var response = await chrome.runtime.sendMessage({
+          type: "generateTitle",
+          data: {
+            owner: ctx.owner,
+            repo: ctx.repo,
+            prNumber: ctx.prNumber,
+            existingTitle: existingTitle,
+            branchContext: branchContext
+          }
+        });
+        if (response.error) {
+          log("error", "Error from background (generateTitle): " + response.error);
+          showToast("Error: " + response.error, true);
+          return;
+        }
+        if (response.updated) {
+          showToast("PR title updated via GitHub API!");
+        } else {
+          showToast("Title generated but update status unknown.");
+        }
+      } catch (err) {
+        log("error", "Error in handleGenerateOpenedTitle: " + err.message + " | Stack: " + err.stack);
+        showToast("Error: " + err.message, true);
+      } finally {
+        setButtonLoading(btn, false);
+        if (openedDescBtn) setButtonLoading(openedDescBtn, false);
+      }
+    })();
+  }
+
+  function handleGenerateOpenedDescription() {
+    var btn = document.getElementById(BTN_OPENED_DESC_ID);
+    if (!btn || btn.disabled) { log("warn", "Opened desc button not found or disabled"); return; }
+    setButtonLoading(btn, true);
+    var openedTitleBtn = document.getElementById(BTN_OPENED_TITLE_ID);
+    if (openedTitleBtn) setButtonLoading(openedTitleBtn, true);
+
+    (async function () {
+      try {
+        var ctx = extractOwnerRepoPRNumber();
+        var existingTitle = extractExistingOpenedTitle();
+        var existingDescription = extractExistingOpenedDescription();
+        var branchContext = extractBranchContext();
+        if (!ctx.owner || !ctx.repo || !ctx.prNumber) {
+          showToast("Could not determine PR owner/repo/number from URL.", true);
+          return;
+        }
+        log("info", "handleGenerateOpenedDescription - " + JSON.stringify(ctx));
+        var response = await chrome.runtime.sendMessage({
+          type: "generateDescription",
+          data: {
+            owner: ctx.owner,
+            repo: ctx.repo,
+            prNumber: ctx.prNumber,
+            existingTitle: existingTitle,
+            existingDescription: existingDescription,
+            branchContext: branchContext
+          }
+        });
+        if (response.error) {
+          log("error", "Error from background (generateDescription): " + response.error);
+          showToast("Error: " + response.error, true);
+          return;
+        }
+        if (response.updated) {
+          showToast("PR description updated via GitHub API!");
+        } else {
+          showToast("Description generated but update status unknown.");
+        }
+      } catch (err) {
+        log("error", "Error in handleGenerateOpenedDescription: " + err.message + " | Stack: " + err.stack);
+        showToast("Error: " + err.message, true);
+      } finally {
+        setButtonLoading(btn, false);
+        if (openedTitleBtn) setButtonLoading(openedTitleBtn, false);
+      }
+    })();
+  }
+
+  function injectOpenedPRTitleButton() {
+    if (document.getElementById(BTN_OPENED_TITLE_ID)) return;
+
+    var titleArea = document.querySelector('[data-component="PH_Title"]');
+    if (!titleArea) { log("warn", "PH_Title not found for opened PR title button"); return; }
+
+    var titleSpan = titleArea.querySelector("span.markdown-title");
+    if (!titleSpan) { log("warn", "markdown-title span not found in PH_Title"); return; }
+
+    var parentSpan = titleSpan.closest("span") || titleSpan.parentElement;
+    if (!parentSpan) { log("warn", "No parent span for title span"); return; }
+
+    var btn = createButton(BTN_OPENED_TITLE_ID, "AI Title", handleGenerateOpenedTitle);
+    btn.classList.add("ai-generate-btn--opened-title");
+    parentSpan.appendChild(btn);
+    log("info", "Opened PR title button injected");
+  }
+
+  function injectOpenedPRDescButton() {
+    if (document.getElementById(BTN_OPENED_DESC_ID)) return;
+
+    var commentBody = document.querySelector("div.js-command-palette-pull-body .js-comment-body");
+    if (!commentBody) commentBody = document.querySelector("div.js-comment-body");
+    if (!commentBody) { log("warn", "js-comment-body not found for opened PR desc button"); return; }
+
+    var commentContainer = commentBody.closest(".timeline-comment-group");
+    if (!commentContainer) commentContainer = commentBody.closest(".comment");
+    if (!commentContainer) commentContainer = commentBody.parentElement;
+    if (!commentContainer) { log("warn", "No comment container for desc button"); return; }
+
+    var commentHeader = commentContainer.querySelector(".timeline-comment-header");
+    if (!commentHeader) { log("warn", "No timeline-comment-header for desc button"); return; }
+
+    var actionsDiv = commentHeader.querySelector(".timeline-comment-actions");
+    if (!actionsDiv) { log("warn", "No timeline-comment-actions for desc button"); return; }
+
+    var btn = createButton(BTN_OPENED_DESC_ID, "AI Description", handleGenerateOpenedDescription);
+    btn.classList.add("ai-generate-btn--opened-desc");
+    actionsDiv.prepend(btn);
+    log("info", "Opened PR description button injected");
+  }
+
   function injectButtons() {
     injectTitleButton();
     injectDescButton();
+    injectLogToggleButton();
+  }
+
+  function injectOpenedPRButtons() {
+    injectOpenedPRTitleButton();
+    injectOpenedPRDescButton();
     injectLogToggleButton();
   }
 
@@ -574,6 +766,16 @@
               injectButtons();
               return;
             }
+            if (
+              node.querySelector('[data-component="PH_Title"]') ||
+              node.querySelector("div.js-comment-body") ||
+              (node.matches && node.matches('[data-component="PH_Title"]'))
+            ) {
+              if (isPROpenedPage()) {
+                injectOpenedPRButtons();
+                return;
+              }
+            }
           }
         }
       }
@@ -584,6 +786,8 @@
     setTimeout(function () {
       if (isPRCreationPage()) {
         injectButtons();
+      } else if (isPROpenedPage()) {
+        injectOpenedPRButtons();
       }
     }, 1000);
   };
@@ -594,17 +798,25 @@
 
   function init() {
     log("info", "init called on URL: " + window.location.href);
-    if (!isPRCreationPage()) {
-      log("info", "Not a PR creation page, skipping");
-      return;
+    if (isPRCreationPage()) {
+      log("info", "PR creation page detected, injecting buttons...");
+      injectButtons();
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+      log("info", "MutationObserver started");
+    } else if (isPROpenedPage()) {
+      log("info", "Opened PR page detected, injecting buttons...");
+      injectOpenedPRButtons();
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+      log("info", "MutationObserver started for opened PR");
+    } else {
+      log("info", "Not a PR creation or opened PR page, skipping");
     }
-    log("info", "PR creation page detected, injecting buttons...");
-    injectButtons();
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-    log("info", "MutationObserver started");
   }
 
   if (document.readyState === "loading") {

@@ -179,3 +179,21 @@
 .ai-log-info {
   color: #58a6ff !important;
 }
+
+.ai-generate-btn--opened-title {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.ai-generate-btn--opened-desc {
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 4px;
+  margin-right: 8px;
+  float: right;
+}

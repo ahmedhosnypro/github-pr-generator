@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GitHub PR Generator",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Generate GitHub PR title and description using an OpenAI-compatible API",
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
@@ -16,7 +16,7 @@
     {
       "matches": [
         "https://github.com/*/compare/*",
-        "https://github.com/*/pull/*/edit*"
+        "https://github.com/*/pull/*"
       ],
       "js": ["content.js"],
       "css": ["styles.css"],

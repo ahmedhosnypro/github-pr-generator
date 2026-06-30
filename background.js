@@ -75,6 +75,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+  if (message.type === "generateTitle") {
+    handleGenerateTitle(message.data)
+      .then((result) => {
+        logMsg("generateTitle success - title: " + result.title);
+        sendResponse(result);
+      })
+      .catch((err) => {
+        logMsg("generateTitle error: " + err.message);
+        sendResponse({ error: err.message });
+      });
+    return true;
+  }
+  if (message.type === "generateDescription") {
+    handleGenerateDescription(message.data)
+      .then((result) => {
+        logMsg("generateDescription success - body length: " + (result.body || "").length);
+        sendResponse(result);
+      })
+      .catch((err) => {
+        logMsg("generateDescription error: " + err.message);
+        sendResponse({ error: err.message });
+      });
+    return true;
+  }
 });
 
 async function fetchGitHubDiff(config, branchContext) {
@@ -232,6 +256,179 @@ function truncateDiff(diffText, maxLines, maxBytes) {
   return result.join("\n");
 }
 
+async function fetchPRDetails(config, owner, repo, prNumber) {
+  var namePattern = /^[a-zA-Z0-9_.-]+$/;
+  if (!namePattern.test(owner) || !namePattern.test(repo)) {
+    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
+
+  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
+  logMsg("Fetching PR details from: " + url);
+
+  var headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "github-pr-generator-extension"
+  };
+  if (config.githubToken) {
+    headers["Authorization"] = "Bearer " + config.githubToken;
+  }
+
+  try {
+    var response = await fetch(url, { method: "GET", headers: headers });
+    if (!response.ok) {
+      var errText = await response.text();
+      logMsg("GitHub API error fetching PR details: " + response.status + " - " + errText.substring(0, 200));
+      return { error: "GITHUB_API_ERROR", status: response.status };
+    }
+    var prData = await response.json();
+    logMsg("Fetched PR details - title: " + prData.title + ", base: " + (prData.base && prData.base.ref) + ", head: " + (prData.head && prData.head.ref));
+    return {
+      title: prData.title || "",
+      body: prData.body || "",
+      baseBranch: prData.base && prData.base.ref ? prData.base.ref : "",
+      headBranch: prData.head && prData.head.ref ? prData.head.ref : "",
+      additions: prData.additions || 0,
+      deletions: prData.deletions || 0,
+      changedFiles: prData.changed_files || 0
+    };
+  } catch (fetchErr) {
+    logMsg("GitHub API fetch error (PR details): " + fetchErr.message);
+    return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
+  }
+}
+
+async function fetchPRCommits(config, owner, repo, prNumber) {
+  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/commits";
+  logMsg("Fetching PR commits from: " + url);
+
+  var headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "github-pr-generator-extension"
+  };
+  if (config.githubToken) {
+    headers["Authorization"] = "Bearer " + config.githubToken;
+  }
+
+  try {
+    var response = await fetch(url, { method: "GET", headers: headers });
+    if (!response.ok) {
+      var errText = await response.text();
+      logMsg("GitHub API error fetching PR commits: " + response.status + " - " + errText.substring(0, 200));
+      return { error: "GITHUB_API_ERROR", status: response.status };
+    }
+    var commitsData = await response.json();
+    var commits = commitsData.map(function (c) {
+      return { message: c.commit && c.commit.message ? c.commit.message : "" };
+    });
+    logMsg("Fetched " + commits.length + " PR commits");
+    return { commits: commits };
+  } catch (fetchErr) {
+    logMsg("GitHub API fetch error (PR commits): " + fetchErr.message);
+    return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
+  }
+}
+
+async function fetchPRFiles(config, owner, repo, prNumber) {
+  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/files";
+  logMsg("Fetching PR files from: " + url);
+
+  var headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "github-pr-generator-extension"
+  };
+  if (config.githubToken) {
+    headers["Authorization"] = "Bearer " + config.githubToken;
+  }
+
+  try {
+    var response = await fetch(url, { method: "GET", headers: headers });
+    if (!response.ok) {
+      var errText = await response.text();
+      logMsg("GitHub API error fetching PR files: " + response.status + " - " + errText.substring(0, 200));
+      return { error: "GITHUB_API_ERROR", status: response.status };
+    }
+    var filesData = await response.json();
+    var files = filesData.map(function (f) {
+      var type = "modified";
+      if (f.status === "added") type = "added";
+      else if (f.status === "removed") type = "removed";
+      else if (f.status === "renamed") type = "renamed";
+      return {
+        path: f.filename || "",
+        type: type,
+        additions: f.additions || 0,
+        deletions: f.deletions || 0,
+        diffAnchor: ""
+      };
+    });
+    logMsg("Fetched " + files.length + " PR files");
+    return { files: files };
+  } catch (fetchErr) {
+    logMsg("GitHub API fetch error (PR files): " + fetchErr.message);
+    return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
+  }
+}
+
+async function updatePRField(config, owner, repo, prNumber, fields) {
+  if (!config.githubToken) {
+    logMsg("No GitHub token configured for PR update");
+    return { error: "GITHUB_NO_TOKEN" };
+  }
+
+  var namePattern = /^[a-zA-Z0-9_.-]+$/;
+  if (!namePattern.test(owner) || !namePattern.test(repo)) {
+    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
+
+  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
+  logMsg("Updating PR via PATCH: " + url + " fields: " + Object.keys(fields).join(", "));
+
+  var headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "github-pr-generator-extension",
+    "Authorization": "Bearer " + config.githubToken,
+    "Content-Type": "application/json"
+  };
+
+  try {
+    var response = await fetch(url, {
+      method: "PATCH",
+      headers: headers,
+      body: JSON.stringify(fields)
+    });
+    if (!response.ok) {
+      var errText = await response.text();
+      logMsg("GitHub API error updating PR: " + response.status + " - " + errText.substring(0, 200));
+      if (response.status === 403) {
+        return { error: "GITHUB_403", message: "GitHub PAT may lack repo scope or insufficient permissions." };
+      }
+      if (response.status === 422) {
+        return { error: "GITHUB_422", message: "Validation failed: " + errText.substring(0, 200) };
+      }
+      return { error: "GITHUB_API_ERROR", status: response.status, message: errText.substring(0, 200) };
+    }
+    var result = await response.json();
+    logMsg("PR updated successfully - title: " + result.title);
+    return { success: true, title: result.title, body: result.body };
+  } catch (fetchErr) {
+    logMsg("GitHub API fetch error (PR update): " + fetchErr.message);
+    return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
+  }
+}
+
+function makeGitHubHeaders(config) {
+  var headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "github-pr-generator-extension"
+  };
+  if (config.githubToken) {
+    headers["Authorization"] = "Bearer " + config.githubToken;
+  }
+  return headers;
+}
+
 async function handleGenerate(data) {
   logMsg("handleGenerate - commits: " + (data.commits ? data.commits.length : 0) + ", files: " + (data.fileChanges ? data.fileChanges.length : 0) + ", hasBranchContext: " + !!(data.branchContext && data.branchContext.owner));
 
@@ -274,6 +471,201 @@ async function handleGenerate(data) {
   return parsed;
 }
 
+async function handleGenerateTitle(data) {
+  logMsg("handleGenerateTitle - owner: " + (data.owner || "") + ", repo: " + (data.repo || "") + ", prNumber: " + (data.prNumber || ""));
+
+  var config = await getConfig();
+  var configError = validateConfig(config);
+  if (configError) {
+    logMsg("Config validation failed: " + configError);
+    throw new Error(configError);
+  }
+
+  if (!config.githubToken) {
+    throw new Error("GitHub Personal Access Token is required to update PR title. Set it in config.local.json or extension popup (needs 'repo' scope).");
+  }
+
+  var owner = data.owner || "";
+  var repo = data.repo || "";
+  var prNumber = data.prNumber || "";
+
+  var prDetails = await fetchPRDetails(config, owner, repo, prNumber);
+  if (prDetails.error) {
+    throw new Error("Failed to fetch PR details: " + prDetails.error);
+  }
+
+  var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
+  var commits = prCommits.commits || [];
+
+  var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
+  var fileChanges = prFiles.files || [];
+
+  var branchContext = {
+    owner: owner,
+    repo: repo,
+    baseBranch: prDetails.baseBranch,
+    headBranch: prDetails.headBranch
+  };
+
+  var diffResult = await fetchGitHubDiff(config, branchContext);
+  var diffText = null;
+  var hunkRanges = null;
+  if (diffResult && diffResult.diff) {
+    diffText = diffResult.diff;
+    hunkRanges = diffResult.hunks;
+  }
+
+  var linkedIssues = [];
+  commits.forEach(function (c) {
+    var patterns = [
+      /(?:fixes|resolves|closes|fix|resolve|close|addresses|address|references|refs|see|related\s+to)\s+#(\d+)/gi,
+      /#([1-9]\d{2,})/g
+    ];
+    patterns.forEach(function (pat) {
+      var match;
+      while ((match = pat.exec(c.message)) !== null) {
+        if (linkedIssues.indexOf("#" + match[1]) === -1) {
+          linkedIssues.push("#" + match[1]);
+        }
+      }
+    });
+  });
+
+  var stats = {
+    files: prDetails.changedFiles || fileChanges.length || 0,
+    additions: prDetails.additions || 0,
+    deletions: prDetails.deletions || 0
+  };
+
+  var changesSummaryData = {
+    commits: commits,
+    fileChanges: fileChanges,
+    stats: stats,
+    branchContext: branchContext,
+    linkedIssues: linkedIssues,
+    existingBody: prDetails.body || ""
+  };
+
+  var changesSummary = buildChangesSummary(changesSummaryData, diffText, hunkRanges);
+  logMsg("handleGenerateTitle - built changesSummary, length: " + changesSummary.length);
+
+  var titlePrompt = buildTitleOnlyPrompt(changesSummary, prDetails.title || data.existingTitle || "");
+  logMsg("handleGenerateTitle - built titlePrompt, length: " + titlePrompt.length);
+
+  var llmResult = await callAPI(config, titlePrompt);
+  var newTitle = parseTitleOnlyResponse(llmResult);
+  logMsg("handleGenerateTitle - parsed title: " + newTitle);
+
+  var updateResult = await updatePRField(config, owner, repo, prNumber, { title: newTitle });
+  if (updateResult.error) {
+    if (updateResult.error === "GITHUB_NO_TOKEN") {
+      throw new Error("GitHub Personal Access Token is required to update PR title. Set it in config.local.json or extension popup (needs 'repo' scope).");
+    }
+    throw new Error("Failed to update PR title: " + (updateResult.message || updateResult.error));
+  }
+
+  return { title: newTitle, updated: true };
+}
+
+async function handleGenerateDescription(data) {
+  logMsg("handleGenerateDescription - owner: " + (data.owner || "") + ", repo: " + (data.repo || "") + ", prNumber: " + (data.prNumber || ""));
+
+  var config = await getConfig();
+  var configError = validateConfig(config);
+  if (configError) {
+    logMsg("Config validation failed: " + configError);
+    throw new Error(configError);
+  }
+
+  if (!config.githubToken) {
+    throw new Error("GitHub Personal Access Token is required to update PR description. Set it in config.local.json or extension popup (needs 'repo' scope).");
+  }
+
+  var owner = data.owner || "";
+  var repo = data.repo || "";
+  var prNumber = data.prNumber || "";
+
+  var prDetails = await fetchPRDetails(config, owner, repo, prNumber);
+  if (prDetails.error) {
+    throw new Error("Failed to fetch PR details: " + prDetails.error);
+  }
+
+  var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
+  var commits = prCommits.commits || [];
+
+  var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
+  var fileChanges = prFiles.files || [];
+
+  var branchContext = {
+    owner: owner,
+    repo: repo,
+    baseBranch: prDetails.baseBranch,
+    headBranch: prDetails.headBranch
+  };
+
+  var diffResult = await fetchGitHubDiff(config, branchContext);
+  var diffText = null;
+  var hunkRanges = null;
+  if (diffResult && diffResult.diff) {
+    diffText = diffResult.diff;
+    hunkRanges = diffResult.hunks;
+  }
+
+  var linkedIssues = [];
+  commits.forEach(function (c) {
+    var patterns = [
+      /(?:fixes|resolves|closes|fix|resolve|close|addresses|address|references|refs|see|related\s+to)\s+#(\d+)/gi,
+      /#([1-9]\d{2,})/g
+    ];
+    patterns.forEach(function (pat) {
+      var match;
+      while ((match = pat.exec(c.message)) !== null) {
+        if (linkedIssues.indexOf("#" + match[1]) === -1) {
+          linkedIssues.push("#" + match[1]);
+        }
+      }
+    });
+  });
+
+  var stats = {
+    files: prDetails.changedFiles || fileChanges.length || 0,
+    additions: prDetails.additions || 0,
+    deletions: prDetails.deletions || 0
+  };
+
+  var existingTitle = prDetails.title || data.existingTitle || "";
+  var existingDescription = data.existingDescription || prDetails.body || "";
+
+  var changesSummaryData = {
+    commits: commits,
+    fileChanges: fileChanges,
+    stats: stats,
+    branchContext: branchContext,
+    linkedIssues: linkedIssues,
+    existingBody: existingDescription
+  };
+
+  var changesSummary = buildChangesSummary(changesSummaryData, diffText, hunkRanges);
+  logMsg("handleGenerateDescription - built changesSummary, length: " + changesSummary.length);
+
+  var descPrompt = buildDescriptionOnlyPrompt(changesSummary, existingTitle, existingDescription);
+  logMsg("handleGenerateDescription - built descPrompt, length: " + descPrompt.length);
+
+  var llmResult = await callAPI(config, descPrompt);
+  var newDescription = parseDescriptionOnlyResponse(llmResult);
+  logMsg("handleGenerateDescription - parsed description length: " + newDescription.length);
+
+  var updateResult = await updatePRField(config, owner, repo, prNumber, { body: newDescription });
+  if (updateResult.error) {
+    if (updateResult.error === "GITHUB_NO_TOKEN") {
+      throw new Error("GitHub Personal Access Token is required to update PR description. Set it in config.local.json or extension popup (needs 'repo' scope).");
+    }
+    throw new Error("Failed to update PR description: " + (updateResult.message || updateResult.error));
+  }
+
+  return { body: newDescription, updated: true };
+}
+
 function parseCombinedResponse(text) {
   var title = "";
   var description = "";
@@ -306,6 +698,98 @@ function parseCombinedResponse(text) {
   }
 
   return { title: title, description: description };
+}
+
+function buildTitleOnlyPrompt(changesSummary, existingTitle) {
+  var prompt = "Generate ONLY a GitHub pull request title for the following changes. Do NOT generate a description.\n\n";
+  prompt += changesSummary + "\n";
+
+  if (existingTitle && existingTitle.trim().length > 0) {
+    prompt += "## Existing Title\nThe current title is: \"" + existingTitle + "\"\nGenerate an improved version.\n\n";
+  }
+
+  prompt += "OUTPUT FORMAT:\n";
+  prompt += "Output ONLY the PR title on a single line. No quotes, no markdown, no prefix like \"Title:\", no description.\n";
+  prompt += "Use conventional commit format (e.g. \"feat: add JWT auth\", \"fix: resolve token expiry\", \"refactor: extract validation logic\"). Under 72 characters.\n\n";
+  prompt += "RULES:\n";
+  prompt += "- Be specific — reference actual code entities from the diff, not generic descriptions\n";
+  prompt += "- Do NOT wrap the output in backtick fences\n";
+  prompt += "- Do NOT include any description or body text, ONLY the title\n";
+
+  return prompt;
+}
+
+function buildDescriptionOnlyPrompt(changesSummary, existingTitle, existingDescription) {
+  var prompt = "Generate ONLY a GitHub pull request description for the following changes. The title is already set and should NOT be changed.\n\n";
+  prompt += changesSummary + "\n";
+
+  if (existingTitle && existingTitle.trim().length > 0) {
+    prompt += "## Current Title\nThe PR title is: \"" + existingTitle + "\"\n\n";
+  }
+
+  if (existingDescription && existingDescription.trim().length > 0) {
+    prompt += "## Existing Content in Description Field\n";
+    prompt += "The user already has the following content in the description field. Respect its structure — keep its headers, fill in its sections, and do not remove any existing content:\n\n";
+    prompt += existingDescription + "\n\n";
+  }
+
+  prompt += "OUTPUT FORMAT:\n";
+  prompt += "Output ONLY the PR description body as structured markdown. Do NOT include a title line.\n\n";
+
+  if (!existingDescription || existingDescription.trim().length === 0) {
+    prompt += "Use these sections (omit sections that would be empty):\n\n";
+  prompt += "## Summary\n";
+  prompt += "A 2-4 sentence overview of what this PR does and why the change is needed.\n\n";
+  prompt += "## Changes\n";
+  prompt += "Grouped by category or area. Include specific details drawn from the diff — mention function names, variable names, and what was added/removed/modified and why. Do NOT just list files; explain the changes. **For each file mentioned, add at least one diff hunk reference using the format from the Anchors section.**\n\n";
+  prompt += "## Walkthrough\n";
+  prompt += "File-by-file list of key changes. **Each entry has:** (1) the file path wrapped in backticks, (2) a 1-2 sentence description of what changed, and (3) a diff hunk reference link. Example: `frontend/app/globals.css` — Updated CSS variables for theme consistency. [[1]](diffhunk://#diff-4a5d3f2_L10-R25)\n\n";
+  prompt += "## Testing\n";
+  prompt += "How a reviewer can test or verify these changes. Include specific steps if inferable from the diff.\n\n";
+  prompt += "## Breaking Changes\n";
+  prompt += "Any API changes, removed functions, renamed exports, or behavioral changes consumers need to know about. **Include diff hunk references for changed APIs.** Omit this section if there are none.\n\n";
+  prompt += "## Linked Issues\n";
+  prompt += "List any issue references from the commit messages. Omit if none.\n\n";
+  }
+  prompt += "RULES:\n";
+  prompt += "- Be specific — reference actual code entities from the diff, not generic descriptions\n";
+  prompt += "- In the Changes and Walkthrough sections, **add diff hunk reference links for every file you mention**: Format: `[[N]](diffhunk://ANCHOR_Lstart-Rend)` (e.g., `[[1]](diffhunk://#diff-4a5d3f2_L5-R25)`) using the reference numbers from the Anchors section. **Use only right-side line ranges** (L5-R25 means lines 5-25 in the new file). Add 1+ references per file.\n";
+  prompt += "- Do NOT start with filler like \"This PR introduces...\" or \"In this pull request...\"\n";
+  prompt += "- Do NOT wrap the output in backtick fences\n";
+  prompt += "- Do NOT add meta-commentary about the description itself\n";
+  prompt += "- Do NOT output a title line — output ONLY the description body\n";
+  prompt += "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n";
+
+  return prompt;
+}
+
+function parseTitleOnlyResponse(text) {
+  text = text.replace(/^```[\w]*\n?/, "").replace(/\n?```\s*$/, "");
+  var title = text.trim();
+  title = title.replace(/^["'`]+|["'`]+$/g, "");
+  title = title.replace(/^#+\s*/, "");
+  title = title.replace(/^\*\*|\*\*$/g, "");
+  title = title.replace(/^Title:\s*/i, "");
+  title = title.trim();
+  var newlineIdx = title.indexOf("\n");
+  if (newlineIdx !== -1) {
+    title = title.substring(0, newlineIdx).trim();
+  }
+  if (title.length > 100) {
+    title = title.substring(0, 100).trim();
+  }
+  return title;
+}
+
+function parseDescriptionOnlyResponse(text) {
+  text = text.replace(/^```[\w]*\n?/, "").replace(/\n?```\s*$/, "");
+  var description = text.trim();
+  description = description.replace(/^Title:.*\n?/i, "");
+  var firstLine = description.split("\n")[0] || "";
+  if (/^[^:]{1,50}:/i.test(firstLine) && firstLine.length < 80 && !firstLine.startsWith("#") && !firstLine.startsWith("-") && !firstLine.startsWith("*")) {
+    description = description.substring(firstLine.length).trim();
+  }
+  return description;
 }
 
 async function callAPI(config, prompt) {
@@ -424,10 +908,10 @@ function buildChangesSummary(data, diffText, hunkRanges) {
             // Enforce GitHub diff hash format: alphanumeric + hyphen exactly 40+ chars
             if (!/^[a-zA-Z0-9_-]{40,}$/.test(anchor)) {
               logMsg("buildChangesSummary - invalid diff anchor skipped: " + fc.diffAnchor);
-              continue;
+              return;
             }
             summary += "- " + refNum + ". [`" + fc.path + "`](diffhunk://" + anchor + ")\n";
-          if (hunkRanges && hunksByFile[fc.path]) {
+          if (hunkRanges && hunkRanges[fc.path]) {
             hunkRanges[fc.path].forEach(function (hunk) {
               var rightEnd = hunk.rightStart + hunk.rightCount - 1;
               // Always format as L<start>-R<end> — even for single lines to avoid ambiguity
@@ -455,8 +939,6 @@ function buildChangesSummary(data, diffText, hunkRanges) {
             }
           });
         }
-        });
-      }
       
       summary += "\n**Diff Link Examples**\n";
       summary += "- Changes to `src/auth.ts`: `frontend/src/auth.ts` — Added token validation. [[1]](diffhunk://#diff-4a5d3f2_L5-R25)\n";
