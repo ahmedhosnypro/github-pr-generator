@@ -88,6 +88,8 @@
   var BTN_DESC_ID = "ai-pr-generate-btn-desc";
   var BTN_OPENED_TITLE_ID = "ai-pr-generate-btn-opened-title";
   var BTN_OPENED_DESC_ID = "ai-pr-generate-btn-opened-desc";
+  var BTN_MERGE_TITLE_ID = "ai-pr-generate-btn-merge-title";
+  var BTN_MERGE_DESC_ID = "ai-pr-generate-btn-merge-desc";
 
   function isPRCreationPage() {
     const url = window.location.href;
@@ -110,6 +112,134 @@
     var hasDesc = !!document.querySelector("div.js-comment-body");
     log("info", "isPROpenedPage check - URL: " + url + ", hasTitle: " + hasTitle + ", hasDesc: " + hasDesc);
     return hasTitle;
+  }
+
+  function isMergeConfirmationPage() {
+    var url = window.location.href;
+    if (!url.includes("github.com")) return false;
+    var prMatch = url.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/);
+    if (!prMatch) return false;
+
+    // GitHub's merge dialog uses React components with auto-generated IDs
+    // Look for the confirm merge container or the input/textarea patterns
+    var hasConfirmMerge = !!document.querySelector('[class*="ConfirmMerge"]');
+    var hasMergeInput = !!document.querySelector('input[data-component="input"][type="text"][value*="Merge pull request"]');
+    var hasMergeTextarea = !!document.querySelector('.prc-Textarea-TextArea-snlco, textarea[placeholder*="extended description"]');
+    var result = hasConfirmMerge || (hasMergeInput && hasMergeTextarea);
+    log("info", "isMergeConfirmationPage check - URL: " + url + ", hasConfirmMerge: " + hasConfirmMerge + ", hasMergeInput: " + hasMergeInput + ", hasMergeTextarea: " + hasMergeTextarea + ", result: " + result);
+    return result;
+  }
+
+  function findMergeTitleInput() {
+    // The ConfirmMerge container is a sibling of the title/desc FormControls.
+    // If it exists on the page, scan the parent wrapper for the merge title input.
+    var confirmContainer = document.querySelector('[class*="ConfirmMerge"]');
+    if (confirmContainer) {
+      var parentWrapper = confirmContainer.parentElement;
+      if (parentWrapper) {
+        var input = parentWrapper.querySelector('input[data-component="input"][type="text"]');
+        if (input) {
+          log("info", "findMergeTitleInput - found near ConfirmMerge container");
+          return input;
+        }
+      }
+    }
+
+    // Fallback: look for input with value starting with "Merge pull request"
+    var allInputs = document.querySelectorAll('input[type="text"][data-component="input"]');
+    for (var i = 0; i < allInputs.length; i++) {
+      var val = allInputs[i].value || "";
+      if (val.indexOf("Merge pull request") === 0) {
+        log("info", "findMergeTitleInput - found by value pattern");
+        return allInputs[i];
+      }
+    }
+
+    // Legacy fallback: old GitHub DOM
+    var legacy = document.querySelector('input#merge_title_field, input[name="merge_title_field"]');
+    if (legacy) {
+      log("info", "findMergeTitleInput - found legacy selector");
+      return legacy;
+    }
+
+    log("warn", "findMergeTitleInput - not found");
+    return null;
+  }
+
+  function findMergeDescTextarea() {
+    // Primary: textarea with "extended description" placeholder near ConfirmMerge container
+    var confirmContainer = document.querySelector('[class*="ConfirmMerge"]');
+    if (confirmContainer) {
+      var parentWrapper = confirmContainer.parentElement;
+      if (parentWrapper) {
+        var textarea = parentWrapper.querySelector('.prc-Textarea-TextArea-snlco, textarea[placeholder*="extended description"]');
+        if (textarea) {
+          log("info", "findMergeDescTextarea - found near ConfirmMerge container");
+          return textarea;
+        }
+      }
+    }
+
+    // Fallback: any textarea with "extended description" placeholder
+    var allTextareas = document.querySelectorAll('textarea[placeholder*="extended description"]');
+    if (allTextareas.length > 0) {
+      log("info", "findMergeDescTextarea - found by placeholder");
+      return allTextareas[0];
+    }
+
+    // Fallback: prc-Textarea class
+    var prcTextarea = document.querySelector('.prc-Textarea-TextArea-snlco');
+    if (prcTextarea) {
+      log("info", "findMergeDescTextarea - found by prc class");
+      return prcTextarea;
+    }
+
+    // Legacy fallback
+    var legacy = document.querySelector('textarea#merge_message_field, textarea[name="merge_message_field"]');
+    if (legacy) {
+      log("info", "findMergeDescTextarea - found legacy selector");
+      return legacy;
+    }
+
+    log("warn", "findMergeDescTextarea - not found");
+    return null;
+  }
+
+  function extractExistingMergeTitle() {
+    var input = findMergeTitleInput();
+    var val = input ? (input.value || "") : "";
+    log("info", "extractExistingMergeTitle - " + val);
+    return val;
+  }
+
+  function extractExistingMergeDescription() {
+    var textarea = findMergeDescTextarea();
+    var val = textarea ? (textarea.value || "") : "";
+    log("info", "extractExistingMergeDescription - length: " + val.length);
+    return val;
+  }
+
+  function fillMergeFields(title, description) {
+    log("info", "fillMergeFields called - title: " + title + ", description length: " + (description ? description.length : 0));
+    var titleInput = findMergeTitleInput();
+    var descTextarea = findMergeDescTextarea();
+
+    if (titleInput && title) {
+      setReactValue(titleInput, title);
+      titleInput.focus();
+      titleInput.blur();
+      log("info", "Merge title input filled");
+    } else if (!titleInput && title) {
+      log("error", "Merge title input not found!");
+    }
+
+    if (descTextarea && description) {
+      setReactValue(descTextarea, description);
+      descTextarea.dispatchEvent(new Event("change", { bubbles: true }));
+      log("info", "Merge description textarea filled");
+    } else if (!descTextarea && description) {
+      log("error", "Merge description textarea not found!");
+    }
   }
 
   function extractOwnerRepoPRNumber() {
@@ -690,6 +820,163 @@
     log("info", "Opened PR title button injected");
   }
 
+  async function handleGenerateMergeTitle() {
+    var btn = document.getElementById(BTN_MERGE_TITLE_ID);
+    if (!btn || btn.disabled) { log("warn", "Merge title button not found or disabled"); return; }
+    setButtonLoading(btn, true);
+    var mergeDescBtn = document.getElementById(BTN_MERGE_DESC_ID);
+    if (mergeDescBtn) setButtonLoading(mergeDescBtn, true);
+
+    try {
+      var ctx = extractOwnerRepoPRNumber();
+      var existingTitle = extractExistingOpenedTitle();
+      var existingMergeTitle = extractExistingMergeTitle();
+      var branchContext = extractBranchContext();
+      var existingDescription = extractExistingOpenedDescription();
+      if (!ctx.owner || !ctx.repo || !ctx.prNumber) {
+        showToast("Could not determine PR owner/repo/number from URL.", true);
+        return;
+      }
+      log("info", "handleGenerateMergeTitle - " + JSON.stringify(ctx));
+      var response = await chrome.runtime.sendMessage({
+        type: "generateMergeTitle",
+        data: {
+          owner: ctx.owner,
+          repo: ctx.repo,
+          prNumber: ctx.prNumber,
+          existingTitle: existingTitle,
+          existingMergeTitle: existingMergeTitle,
+          existingDescription: existingDescription,
+          branchContext: branchContext
+        }
+      });
+      if (response.error) {
+        log("error", "Error from background (generateMergeTitle): " + response.error);
+        showToast("Error: " + response.error, true);
+        return;
+      }
+      fillMergeFields(response.title, "");
+      showToast("Merge commit title generated!");
+    } catch (err) {
+      log("error", "Error in handleGenerateMergeTitle: " + err.message + " | Stack: " + err.stack);
+      showToast("Error: " + err.message, true);
+    } finally {
+      setButtonLoading(btn, false);
+      if (mergeDescBtn) setButtonLoading(mergeDescBtn, false);
+    }
+  }
+
+  async function handleGenerateMergeDescription() {
+    var btn = document.getElementById(BTN_MERGE_DESC_ID);
+    if (!btn || btn.disabled) { log("warn", "Merge desc button not found or disabled"); return; }
+    setButtonLoading(btn, true);
+    var mergeTitleBtn = document.getElementById(BTN_MERGE_TITLE_ID);
+    if (mergeTitleBtn) setButtonLoading(mergeTitleBtn, true);
+
+    try {
+      var ctx = extractOwnerRepoPRNumber();
+      var existingTitle = extractExistingOpenedTitle();
+      var existingMergeTitle = extractExistingMergeTitle();
+      var existingDescription = extractExistingOpenedDescription();
+      var existingMergeDesc = extractExistingMergeDescription();
+      var branchContext = extractBranchContext();
+      if (!ctx.owner || !ctx.repo || !ctx.prNumber) {
+        showToast("Could not determine PR owner/repo/number from URL.", true);
+        return;
+      }
+      log("info", "handleGenerateMergeDescription - " + JSON.stringify(ctx));
+      var response = await chrome.runtime.sendMessage({
+        type: "generateMergeDescription",
+        data: {
+          owner: ctx.owner,
+          repo: ctx.repo,
+          prNumber: ctx.prNumber,
+          existingTitle: existingTitle,
+          existingMergeTitle: existingMergeTitle,
+          existingDescription: existingDescription,
+          existingMergeDescription: existingMergeDesc,
+          branchContext: branchContext
+        }
+      });
+      if (response.error) {
+        log("error", "Error from background (generateMergeDescription): " + response.error);
+        showToast("Error: " + response.error, true);
+        return;
+      }
+      fillMergeFields("", response.description);
+      showToast("Merge commit description generated!");
+    } catch (err) {
+      log("error", "Error in handleGenerateMergeDescription: " + err.message + " | Stack: " + err.stack);
+      showToast("Error: " + err.message, true);
+    } finally {
+      setButtonLoading(btn, false);
+      if (mergeTitleBtn) setButtonLoading(mergeTitleBtn, false);
+    }
+  }
+
+  function injectMergeTitleButton() {
+    if (document.getElementById(BTN_MERGE_TITLE_ID)) return;
+
+    var mergeTitleInput = findMergeTitleInput();
+    if (!mergeTitleInput) { log("warn", "Merge title input not found for button injection"); return; }
+
+    // Make the TextInput wrapper a positioning context
+    var textInputWrapper = mergeTitleInput.closest('[data-component="TextInput"]');
+    if (textInputWrapper) {
+      textInputWrapper.style.position = "relative";
+      var btn = createButton(BTN_MERGE_TITLE_ID, "✨", handleGenerateMergeTitle);
+      btn.classList.add("ai-generate-btn--merge-title");
+      btn.title = "AI Generate Merge Title";
+      textInputWrapper.appendChild(btn);
+      log("info", "Merge title button injected inside TextInput wrapper");
+      return;
+    }
+
+    // Fallback: insert right after the input
+    var btn2 = createButton(BTN_MERGE_TITLE_ID, "AI Merge Title", handleGenerateMergeTitle);
+    btn2.classList.add("ai-generate-btn--merge-title");
+    var parentEl = mergeTitleInput.parentElement;
+    if (parentEl) {
+      parentEl.insertBefore(btn2, mergeTitleInput.nextSibling);
+      log("info", "Merge title button injected after input (fallback)");
+    }
+  }
+
+  function injectMergeDescButton() {
+    if (document.getElementById(BTN_MERGE_DESC_ID)) return;
+
+    var textarea = findMergeDescTextarea();
+    if (!textarea) { log("warn", "Merge description textarea not found for button injection"); return; }
+
+    // Make the TextInput wrapper a positioning context
+    var textInputWrapper = textarea.closest('[data-component="TextInput"]');
+    if (textInputWrapper) {
+      textInputWrapper.style.position = "relative";
+      var btn = createButton(BTN_MERGE_DESC_ID, "✨", handleGenerateMergeDescription);
+      btn.classList.add("ai-generate-btn--merge-desc");
+      btn.title = "AI Generate Merge Description";
+      textInputWrapper.appendChild(btn);
+      log("info", "Merge description button injected inside TextInput wrapper");
+      return;
+    }
+
+    // Last resort: insert right after the textarea
+    var btn2 = createButton(BTN_MERGE_DESC_ID, "✨", handleGenerateMergeDescription);
+    btn2.classList.add("ai-generate-btn--merge-desc");
+    btn2.title = "AI Generate Merge Description";
+    var parentEl = textarea.parentElement;
+    if (parentEl) {
+      parentEl.insertBefore(btn2, textarea.nextSibling);
+      log("info", "Merge description button injected after textarea (last resort)");
+    }
+  }
+
+  function injectMergeButtons() {
+    injectMergeTitleButton();
+    injectMergeDescButton();
+    injectLogToggleButton();
+  }
+
   function injectOpenedPRDescButton() {
     if (document.getElementById(BTN_OPENED_DESC_ID)) return;
 
@@ -745,7 +1032,22 @@
     if (panel) panel.style.display = "none";
   }
 
+  var mergeCheckInterval = null;
+
+  function startMergeCheckInterval() {
+    if (mergeCheckInterval) return;
+    mergeCheckInterval = setInterval(function () {
+      if (isMergeConfirmationPage()) {
+        injectMergeButtons();
+        // Stop polling once merge buttons are injected
+        clearInterval(mergeCheckInterval);
+        mergeCheckInterval = null;
+      }
+    }, 1000);
+  }
+
   var observer = new MutationObserver(function (mutations) {
+    var mergeDetected = false;
     for (var i = 0; i < mutations.length; i++) {
       var mutation = mutations[i];
       if (
@@ -773,12 +1075,22 @@
             ) {
               if (isPROpenedPage()) {
                 injectOpenedPRButtons();
-                return;
               }
+            }
+            if (
+              node.querySelector('[class*="ConfirmMerge"]') ||
+              node.querySelector('input[data-component="input"][type="text"]') ||
+              node.querySelector('.prc-Textarea-TextArea-snlco, textarea[placeholder*="extended description"]') ||
+              (node.matches && (node.matches('[class*="ConfirmMerge"]') || node.matches('.prc-Textarea-TextArea-snlco')))
+            ) {
+              mergeDetected = true;
             }
           }
         }
       }
+    }
+    if (mergeDetected && isMergeConfirmationPage()) {
+      injectMergeButtons();
     }
   });
 
@@ -786,8 +1098,13 @@
     setTimeout(function () {
       if (isPRCreationPage()) {
         injectButtons();
-      } else if (isPROpenedPage()) {
+      }
+      if (isPROpenedPage()) {
         injectOpenedPRButtons();
+        startMergeCheckInterval();
+      }
+      if (isMergeConfirmationPage()) {
+        injectMergeButtons();
       }
     }, 1000);
   };
@@ -798,24 +1115,32 @@
 
   function init() {
     log("info", "init called on URL: " + window.location.href);
-    if (isPRCreationPage()) {
+    var isCreation = isPRCreationPage();
+    var isOpened = isPROpenedPage();
+    var isMerge = isMergeConfirmationPage();
+
+    if (isCreation) {
       log("info", "PR creation page detected, injecting buttons...");
       injectButtons();
+    }
+    if (isOpened) {
+      log("info", "Opened PR page detected, injecting buttons...");
+      injectOpenedPRButtons();
+      // Start periodic merge dialog check — merge dialog appears on click
+      startMergeCheckInterval();
+    }
+    if (isMerge) {
+      log("info", "Merge confirmation page detected, injecting merge buttons...");
+      injectMergeButtons();
+    }
+    if (isCreation || isOpened || isMerge) {
       observer.observe(document.body, {
         childList: true,
         subtree: true,
       });
       log("info", "MutationObserver started");
-    } else if (isPROpenedPage()) {
-      log("info", "Opened PR page detected, injecting buttons...");
-      injectOpenedPRButtons();
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-      log("info", "MutationObserver started for opened PR");
     } else {
-      log("info", "Not a PR creation or opened PR page, skipping");
+      log("info", "Not a PR creation, opened PR, or merge page, skipping");
     }
   }
 

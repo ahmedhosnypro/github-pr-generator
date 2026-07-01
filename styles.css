@@ -197,3 +197,26 @@
   margin-right: 8px;
   float: right;
 }
+
+.ai-generate-btn--merge-title {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 4px;
+  z-index: 1;
+}
+
+.ai-generate-btn--merge-desc {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 4px;
+  z-index: 1;
+}

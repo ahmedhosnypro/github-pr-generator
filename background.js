@@ -99,6 +99,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true;
   }
+  if (message.type === "generateMergeTitle") {
+    handleGenerateMergeTitle(message.data)
+      .then((result) => {
+        logMsg("generateMergeTitle success - title: " + result.title);
+        sendResponse(result);
+      })
+      .catch((err) => {
+        logMsg("generateMergeTitle error: " + err.message);
+        sendResponse({ error: err.message });
+      });
+    return true;
+  }
+  if (message.type === "generateMergeDescription") {
+    handleGenerateMergeDescription(message.data)
+      .then((result) => {
+        logMsg("generateMergeDescription success - body length: " + (result.description || "").length);
+        sendResponse(result);
+      })
+      .catch((err) => {
+        logMsg("generateMergeDescription error: " + err.message);
+        sendResponse({ error: err.message });
+      });
+    return true;
+  }
 });
 
 async function fetchGitHubDiff(config, branchContext) {
@@ -664,6 +688,212 @@ async function handleGenerateDescription(data) {
   }
 
   return { body: newDescription, updated: true };
+}
+
+async function handleGenerateMergeTitle(data) {
+  logMsg("handleGenerateMergeTitle - owner: " + (data.owner || "") + ", repo: " + (data.repo || "") + ", prNumber: " + (data.prNumber || ""));
+
+  var config = await getConfig();
+  var configError = validateConfig(config);
+  if (configError) {
+    logMsg("Config validation failed: " + configError);
+    throw new Error(configError);
+  }
+
+  var owner = data.owner || "";
+  var repo = data.repo || "";
+  var prNumber = data.prNumber || "";
+
+  var prDetails = await fetchPRDetails(config, owner, repo, prNumber);
+  if (prDetails.error) {
+    throw new Error("Failed to fetch PR details: " + prDetails.error);
+  }
+
+  var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
+  var commits = prCommits.commits || [];
+
+  var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
+  var fileChanges = prFiles.files || [];
+
+  var branchContext = {
+    owner: owner,
+    repo: repo,
+    baseBranch: prDetails.baseBranch,
+    headBranch: prDetails.headBranch
+  };
+
+  var diffResult = await fetchGitHubDiff(config, branchContext);
+  var diffText = null;
+  var hunkRanges = null;
+  if (diffResult && diffResult.diff) {
+    diffText = diffResult.diff;
+    hunkRanges = diffResult.hunks;
+  }
+
+  var stats = {
+    files: prDetails.changedFiles || fileChanges.length || 0,
+    additions: prDetails.additions || 0,
+    deletions: prDetails.deletions || 0
+  };
+
+  var changesSummaryData = {
+    commits: commits,
+    fileChanges: fileChanges,
+    stats: stats,
+    branchContext: branchContext,
+    linkedIssues: [],
+    existingBody: prDetails.body || ""
+  };
+
+  var changesSummary = buildChangesSummary(changesSummaryData, diffText, hunkRanges);
+  logMsg("handleGenerateMergeTitle - built changesSummary, length: " + changesSummary.length);
+
+  var mergeTitlePrompt = buildMergeTitlePrompt(changesSummary, data.existingTitle || prDetails.title || "", data.existingMergeTitle || "");
+  logMsg("handleGenerateMergeTitle - built mergeTitlePrompt, length: " + mergeTitlePrompt.length);
+
+  var llmResult = await callAPI(config, mergeTitlePrompt);
+  var newTitle = parseTitleOnlyResponse(llmResult);
+  logMsg("handleGenerateMergeTitle - parsed title: " + newTitle);
+
+  return { title: newTitle };
+}
+
+async function handleGenerateMergeDescription(data) {
+  logMsg("handleGenerateMergeDescription - owner: " + (data.owner || "") + ", repo: " + (data.repo || "") + ", prNumber: " + (data.prNumber || ""));
+
+  var config = await getConfig();
+  var configError = validateConfig(config);
+  if (configError) {
+    logMsg("Config validation failed: " + configError);
+    throw new Error(configError);
+  }
+
+  var owner = data.owner || "";
+  var repo = data.repo || "";
+  var prNumber = data.prNumber || "";
+
+  var prDetails = await fetchPRDetails(config, owner, repo, prNumber);
+  if (prDetails.error) {
+    throw new Error("Failed to fetch PR details: " + prDetails.error);
+  }
+
+  var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
+  var commits = prCommits.commits || [];
+
+  var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
+  var fileChanges = prFiles.files || [];
+
+  var branchContext = {
+    owner: owner,
+    repo: repo,
+    baseBranch: prDetails.baseBranch,
+    headBranch: prDetails.headBranch
+  };
+
+  var diffResult = await fetchGitHubDiff(config, branchContext);
+  var diffText = null;
+  var hunkRanges = null;
+  if (diffResult && diffResult.diff) {
+    diffText = diffResult.diff;
+    hunkRanges = diffResult.hunks;
+  }
+
+  var stats = {
+    files: prDetails.changedFiles || fileChanges.length || 0,
+    additions: prDetails.additions || 0,
+    deletions: prDetails.deletions || 0
+  };
+
+  var existingTitle = data.existingTitle || prDetails.title || "";
+  var existingMergeTitle = data.existingMergeTitle || "";
+  var existingDescription = data.existingDescription || prDetails.body || "";
+  var existingMergeDesc = data.existingMergeDescription || "";
+
+  var changesSummaryData = {
+    commits: commits,
+    fileChanges: fileChanges,
+    stats: stats,
+    branchContext: branchContext,
+    linkedIssues: [],
+    existingBody: existingDescription
+  };
+
+  var changesSummary = buildChangesSummary(changesSummaryData, diffText, hunkRanges);
+  logMsg("handleGenerateMergeDescription - built changesSummary, length: " + changesSummary.length);
+
+  var mergeDescPrompt = buildMergeDescriptionPrompt(changesSummary, existingTitle, existingDescription, existingMergeTitle, existingMergeDesc);
+  logMsg("handleGenerateMergeDescription - built mergeDescPrompt, length: " + mergeDescPrompt.length);
+
+  var llmResult = await callAPI(config, mergeDescPrompt);
+  var newDescription = parseDescriptionOnlyResponse(llmResult);
+  logMsg("handleGenerateMergeDescription - parsed description length: " + newDescription.length);
+
+  return { description: newDescription };
+}
+
+function buildMergeTitlePrompt(changesSummary, existingTitle, existingMergeTitle) {
+  var prompt = "Generate ONLY a GitHub merge commit title for the following pull request changes.\n\n";
+  prompt += "A merge commit title summarizes what the entire PR accomplishes in a single line. It typically follows conventional commit format.\n\n";
+  prompt += changesSummary + "\n";
+
+  if (existingTitle && existingTitle.trim().length > 0) {
+    prompt += "## PR Title\nThe pull request title is: \"" + existingTitle + "\"\n";
+    prompt += "Use this as a reference. The merge commit title can be similar but should be a clean, concise summary suitable for the git history.\n\n";
+  }
+
+  if (existingMergeTitle && existingMergeTitle.trim().length > 0) {
+    prompt += "## Existing Merge Commit Title\nThe current merge commit title is: \"" + existingMergeTitle + "\"\nGenerate an improved version.\n\n";
+  }
+
+  prompt += "OUTPUT FORMAT:\n";
+  prompt += "Output ONLY the merge commit title on a single line. No quotes, no markdown, no prefix like \"Title:\", no description.\n";
+  prompt += "Use conventional commit format (e.g. \"feat: add JWT auth\", \"fix: resolve token expiry\", \"refactor: extract validation logic\"). Under 72 characters.\n\n";
+  prompt += "RULES:\n";
+  prompt += "- Be specific — reference actual code entities from the diff, not generic descriptions\n";
+  prompt += "- The merge commit title should summarize the overall change concisely\n";
+  prompt += "- Do NOT wrap the output in backtick fences\n";
+  prompt += "- Do NOT include any description or body text, ONLY the title\n";
+  prompt += "- Do NOT include PR number or branch name in the title\n";
+
+  return prompt;
+}
+
+function buildMergeDescriptionPrompt(changesSummary, existingTitle, existingDescription, existingMergeTitle, existingMergeDesc) {
+  var prompt = "Generate ONLY a GitHub merge commit extended description for the following pull request changes.\n\n";
+  prompt += "A merge commit extended description provides additional context about the change beyond the title. It should be concise but informative for someone reading the git log.\n\n";
+  prompt += changesSummary + "\n";
+
+  if (existingTitle && existingTitle.trim().length > 0) {
+    prompt += "## PR Title\nThe pull request title is: \"" + existingTitle + "\"\n\n";
+  }
+
+  if (existingMergeTitle && existingMergeTitle.trim().length > 0) {
+    prompt += "## Merge Commit Title\nThe merge commit title is: \"" + existingMergeTitle + "\"\n\n";
+  }
+
+  if (existingDescription && existingDescription.trim().length > 0) {
+    prompt += "## PR Description\nThe pull request description is:\n\n" + existingDescription + "\n\n";
+  }
+
+  if (existingMergeDesc && existingMergeDesc.trim().length > 0) {
+    prompt += "## Existing Merge Commit Description\nThe current merge commit description is:\n\n" + existingMergeDesc + "\nGenerate an improved version.\n\n";
+  }
+
+  prompt += "OUTPUT FORMAT:\n";
+  prompt += "Output ONLY the merge commit extended description as plain text or simple markdown. Do NOT include a title line.\n\n";
+  prompt += "Guidelines:\n";
+  prompt += "- Summarize the key changes and their motivation\n";
+  prompt += "- Mention important implementation details a future reader would need\n";
+  prompt += "- Reference specific function names, components, or modules changed\n";
+  prompt += "- Keep it concise (typically 3-10 lines)\n";
+  prompt += "- Do NOT include diff hunk references — this is for the git log, not the PR page\n\n";
+  prompt += "RULES:\n";
+  prompt += "- Do NOT start with filler like \"This PR introduces...\" or \"In this pull request...\"\n";
+  prompt += "- Do NOT wrap the output in backtick fences\n";
+  prompt += "- Do NOT add meta-commentary about the description itself\n";
+  prompt += "- Do NOT output a title line — output ONLY the description body\n";
+
+  return prompt;
 }
 
 function parseCombinedResponse(text) {
