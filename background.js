@@ -24,11 +24,13 @@ loadFileConfig();
 function getConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get({}, (stored) => {
+      // User-saved values take precedence over the bundled
+      // config.local.json (file acts as a default, not an override).
       const config = {
-        apiEndpoint: (FILE_CONFIG && FILE_CONFIG.apiEndpoint) || stored.apiEndpoint || "",
-        apiKey: (FILE_CONFIG && FILE_CONFIG.apiKey) || stored.apiKey || "",
-        model: (FILE_CONFIG && FILE_CONFIG.model) || stored.model || "",
-        githubToken: (FILE_CONFIG && FILE_CONFIG.githubToken) || stored.githubToken || "",
+        apiEndpoint: stored.apiEndpoint || (FILE_CONFIG && FILE_CONFIG.apiEndpoint) || "",
+        apiKey: stored.apiKey || (FILE_CONFIG && FILE_CONFIG.apiKey) || "",
+        model: stored.model || (FILE_CONFIG && FILE_CONFIG.model) || "",
+        githubToken: stored.githubToken || (FILE_CONFIG && FILE_CONFIG.githubToken) || "",
         diffEnabled: (FILE_CONFIG && FILE_CONFIG.diffEnabled !== undefined) ? FILE_CONFIG.diffEnabled : (stored.diffEnabled !== undefined ? stored.diffEnabled === true || stored.diffEnabled === "true" : true),
         diffMaxLines: (FILE_CONFIG && FILE_CONFIG.diffMaxLines !== undefined) ? FILE_CONFIG.diffMaxLines : (stored.diffMaxLines !== undefined ? parseInt(stored.diffMaxLines, 10) : 3000),
         diffMaxBytes: (FILE_CONFIG && FILE_CONFIG.diffMaxBytes !== undefined) ? FILE_CONFIG.diffMaxBytes : (stored.diffMaxBytes !== undefined ? parseInt(stored.diffMaxBytes, 10) : 100000),
@@ -72,6 +74,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "getConfig") {
     getConfig().then((config) => {
       sendResponse({ apiEndpoint: config.apiEndpoint, model: config.model, hasKey: !!config.apiKey, hasGithubToken: !!config.githubToken });
+    });
+    return true;
+  }
+  if (message.type === "saveConfig") {
+    // Persist config from the popup in the service worker context, which
+    // outlives the popup. This prevents writes from being dropped if the
+    // popup closes before an in-popup chrome.storage.local.set completes.
+    const data = message.data || {};
+    try {
+      chrome.storage.local.set({
+        apiEndpoint: (data.apiEndpoint || "").trim(),
+        apiKey: (data.apiKey || "").trim(),
+        model: (data.model || "").trim(),
+        githubToken: (data.githubToken || "").trim(),
+      }, () => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          logMsg("saveConfig storage error: " + err.message);
+          sendResponse({ ok: false, error: err.message });
+        } else {
+          logMsg("saveConfig stored: apiEndpoint=" + data.apiEndpoint + ", model=" + data.model + ", hasKey=" + !!data.apiKey + ", hasGithubToken=" + !!data.githubToken);
+          sendResponse({ ok: true });
+        }
+      });
+      return true;
+    } catch (e) {
+      logMsg("saveConfig exception: " + e.message);
+      sendResponse({ ok: false, error: e.message });
+      return false;
+    }
+  }
+  if (message.type === "getStoredConfig") {
+    chrome.storage.local.get(["apiEndpoint", "apiKey", "model", "githubToken"], (stored) => {
+      sendResponse(stored || {});
     });
     return true;
   }
