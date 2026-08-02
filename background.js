@@ -1,4 +1,5 @@
 let FILE_CONFIG = null;
+let configLoadPromise = null;
 
 function logMsg(msg) {
   console.log("[PR Generator BG v8] " + msg);
@@ -19,11 +20,12 @@ async function loadFileConfig() {
   }
 }
 
-loadFileConfig();
+configLoadPromise = loadFileConfig();
 
 function getConfig() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get({}, (stored) => {
+  return new Promise(async (resolve) => {
+    await configLoadPromise;
+    chrome.storage.local.get(["apiEndpoint", "apiKey", "model", "githubToken", "diffEnabled", "diffMaxLines", "diffMaxBytes"], function(stored) {
       // User-saved values take precedence over the bundled
       // config.local.json (file acts as a default, not an override).
       const config = {
@@ -35,6 +37,7 @@ function getConfig() {
         diffMaxLines: (FILE_CONFIG && FILE_CONFIG.diffMaxLines !== undefined) ? FILE_CONFIG.diffMaxLines : (stored.diffMaxLines !== undefined ? parseInt(stored.diffMaxLines, 10) : 3000),
         diffMaxBytes: (FILE_CONFIG && FILE_CONFIG.diffMaxBytes !== undefined) ? FILE_CONFIG.diffMaxBytes : (stored.diffMaxBytes !== undefined ? parseInt(stored.diffMaxBytes, 10) : 100000),
       };
+  logMsg("[BG LOG] getConfig called - stored.apiEndpoint=" + (stored.apiEndpoint || "") + ", stored.model=" + (stored.model || "") + ", file.apiEndpoint=" + (FILE_CONFIG ? FILE_CONFIG.apiEndpoint : "NONE") + ", file.model=" + (FILE_CONFIG ? FILE_CONFIG.model : "NONE"));
       logMsg("Config resolved: apiEndpoint=" + config.apiEndpoint + ", model=" + config.model + ", hasKey=" + !!config.apiKey + ", hasGithubToken=" + !!config.githubToken + ", diffEnabled=" + config.diffEnabled + ", diffMaxLines=" + config.diffMaxLines + ", diffMaxBytes=" + config.diffMaxBytes);
       resolve(config);
     });
@@ -65,6 +68,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   logMsg("Received message type: " + message.type);
+  logMsg("[BG LOG] generate message received - type=" + message.type + ", hasData=" + !!message.data);
   if (message.type === "generate") {
     handleGenerate(message.data)
       .then((result) => {
@@ -98,6 +102,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (data.apiKey !== undefined) update.apiKey = (data.apiKey || "").trim();
       if (data.model !== undefined) update.model = (data.model || "").trim();
       if (data.githubToken !== undefined) update.githubToken = (data.githubToken || "").trim();
+      if (data.diffEnabled !== undefined) update.diffEnabled = data.diffEnabled;
+      if (data.diffMaxLines !== undefined) update.diffMaxLines = parseInt(data.diffMaxLines, 10);
+      if (data.diffMaxBytes !== undefined) update.diffMaxBytes = parseInt(data.diffMaxBytes, 10);
       chrome.storage.local.set(update, () => {
         const err = chrome.runtime.lastError;
         if (err) {
@@ -116,7 +123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
   if (message.type === "getStoredConfig") {
-    chrome.storage.local.get(["apiEndpoint", "apiKey", "model", "githubToken"], (stored) => {
+    chrome.storage.local.get(["apiEndpoint", "apiKey", "model", "githubToken", "diffEnabled", "diffMaxLines", "diffMaxBytes"], (stored) => {
       sendResponse(stored || {});
     });
     return true;

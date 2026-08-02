@@ -712,7 +712,7 @@
       }
 
       log("info", "Sending message to background script...");
-      var response = await sendToBackground({
+  var response = await sendToBackground({
         type: "generate",
         data: {
           commits: commits.map(function (c) {
