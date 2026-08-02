@@ -27,7 +27,7 @@ A Chrome extension that generates pull request titles and descriptions using any
 
 - Works with any OpenAI-compatible API endpoint
 - Built-in log panel for debugging (copy logs to clipboard)
-- Configurable via `config.local.json` or extension popup
+- Configurable via `config.local.json` or modern extension popup (Material Design 3, dark mode, theme toggle, test buttons)
 - Circuit breaker: validates config before making API calls
 - GitHub PAT support for higher API rate limits and private repo access
 
@@ -103,7 +103,13 @@ cp config.local.example.json config.local.json
 
 ### Extension Popup
 
-Click the extension icon in Chrome's toolbar to open the settings popup. Changes here override `config.local.json` for the current browser session.
+Click the extension icon in Chrome's toolbar to open the modern settings popup. Features:
+
+- **Material Design 3** with light/dark mode (auto-detects browser theme, with manual toggle)
+- Settings saved to `chrome.storage.local` and override `config.local.json`
+- **Test API** button — validates endpoint + key with a quick chat request
+- **Test GitHub** button — validates your PAT against `api.github.com/user`
+- Collapsible **Diff Settings** section (`diffEnabled`, `diffMaxLines`, `diffMaxBytes`)
 
 ### Configuration Validation
 
@@ -268,8 +274,10 @@ github-pr-generator/
 ├── test-extension-coverage.js     # Extension prompt coverage test script
 ├── .gitignore
 ├── popup/
-│   ├── popup.html                 # Extension settings UI
-│   └── popup.js                   # Settings load/save logic
+│   ├── popup.html                 # Modern Material Design 3 settings UI (dark mode, theme toggle, test buttons)
+│   ├── popup.js                   # Settings load/save logic with theme and test handling
+│   �── popup.css                  # Material Design token system with light/dark themes
+├── config.local.json              # Your API config (gitignored)
 └── icons/
     ├── icon16.png
     ├── icon48.png
