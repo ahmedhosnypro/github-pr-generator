@@ -58,6 +58,12 @@ function validateConfig(config) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Keepalive pings from content.js keep the service worker alive across
+  // long API calls. Respond immediately and never touch storage.
+  if (message && message.type === "__keepalive_ping__") {
+    sendResponse({ ok: true });
+    return false;
+  }
   logMsg("Received message type: " + message.type);
   if (message.type === "generate") {
     handleGenerate(message.data)
@@ -83,18 +89,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // popup closes before an in-popup chrome.storage.local.set completes.
     const data = message.data || {};
     try {
-      chrome.storage.local.set({
-        apiEndpoint: (data.apiEndpoint || "").trim(),
-        apiKey: (data.apiKey || "").trim(),
-        model: (data.model || "").trim(),
-        githubToken: (data.githubToken || "").trim(),
-      }, () => {
+      // Only overwrite keys actually present in `data` so that partial
+      // updates (e.g. the popup's per-field autosave) don't clobber the
+      // other saved fields with empty strings, which would silently make
+      // getConfig() fall back to the bundled config.local.json values.
+      const update = {};
+      if (data.apiEndpoint !== undefined) update.apiEndpoint = (data.apiEndpoint || "").trim();
+      if (data.apiKey !== undefined) update.apiKey = (data.apiKey || "").trim();
+      if (data.model !== undefined) update.model = (data.model || "").trim();
+      if (data.githubToken !== undefined) update.githubToken = (data.githubToken || "").trim();
+      chrome.storage.local.set(update, () => {
         const err = chrome.runtime.lastError;
         if (err) {
           logMsg("saveConfig storage error: " + err.message);
           sendResponse({ ok: false, error: err.message });
         } else {
-          logMsg("saveConfig stored: apiEndpoint=" + data.apiEndpoint + ", model=" + data.model + ", hasKey=" + !!data.apiKey + ", hasGithubToken=" + !!data.githubToken);
+          logMsg("saveConfig stored: keys=" + Object.keys(update).join(",") + ", apiEndpoint=" + update.apiEndpoint + ", model=" + update.model + ", hasKey=" + !!update.apiKey + ", hasGithubToken=" + !!update.githubToken);
           sendResponse({ ok: true });
         }
       });
@@ -196,7 +206,7 @@ async function fetchGitHubDiff(config, branchContext) {
 
   try {
     var response = await fetch(url, { method: "GET", headers: headers });
-    logMsg("GitHub API response status: " + response.status);
+    logMsg("GitHub API diff response status: " + response.status + ", rate limit remaining: " + (response.headers.get("X-RateLimit-Remaining") || "unknown"));
 
     if (response.status === 404) {
       logMsg("GitHub API 404 - repo/compare not found (may need PAT for private repo)");
@@ -212,7 +222,7 @@ async function fetchGitHubDiff(config, branchContext) {
 
     if (!response.ok) {
       var errText = await response.text();
-      logMsg("GitHub API error: " + response.status + " - " + errText.substring(0, 200));
+      logMsg("GitHub API error fetching diff: " + response.status + " - " + errText.substring(0, 200));
       return { error: "GITHUB_API_ERROR", status: response.status };
     }
 
@@ -224,7 +234,7 @@ async function fetchGitHubDiff(config, branchContext) {
     logMsg("Trimmed diff length: " + trimmed.length + " bytes, " + Object.keys(hunkRanges).length + " files with hunks");
     return { diff: trimmed, hunks: hunkRanges };
   } catch (fetchErr) {
-    logMsg("GitHub API fetch error (network): " + fetchErr.message);
+    logMsg("GitHub API fetch error (diff): " + fetchErr.message);
     return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
   }
 }
@@ -336,13 +346,14 @@ async function fetchPRDetails(config, owner, repo, prNumber) {
 
   try {
     var response = await fetch(url, { method: "GET", headers: headers });
+    logMsg("PR details response status: " + response.status + ", rate limit remaining: " + (response.headers.get("X-RateLimit-Remaining") || "unknown"));
     if (!response.ok) {
       var errText = await response.text();
       logMsg("GitHub API error fetching PR details: " + response.status + " - " + errText.substring(0, 200));
       return { error: "GITHUB_API_ERROR", status: response.status };
     }
     var prData = await response.json();
-    logMsg("Fetched PR details - title: " + prData.title + ", base: " + (prData.base && prData.base.ref) + ", head: " + (prData.head && prData.head.ref));
+    logMsg("Fetched PR details - title: " + prData.title + ", base: " + (prData.base && prData.base.ref) + ", head: " + (prData.head && prData.head.ref) + ", additions: " + (prData.additions || 0) + ", deletions: " + (prData.deletions || 0) + ", changed_files: " + (prData.changed_files || 0));
     return {
       title: prData.title || "",
       body: prData.body || "",
@@ -359,8 +370,8 @@ async function fetchPRDetails(config, owner, repo, prNumber) {
 }
 
 async function fetchPRCommits(config, owner, repo, prNumber) {
-  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/commits";
-  logMsg("Fetching PR commits from: " + url);
+  var baseUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/commits";
+  logMsg("Fetching PR commits from: " + baseUrl);
 
   var headers = {
     "Accept": "application/vnd.github.v3+json",
@@ -371,18 +382,46 @@ async function fetchPRCommits(config, owner, repo, prNumber) {
   }
 
   try {
-    var response = await fetch(url, { method: "GET", headers: headers });
-    if (!response.ok) {
-      var errText = await response.text();
-      logMsg("GitHub API error fetching PR commits: " + response.status + " - " + errText.substring(0, 200));
-      return { error: "GITHUB_API_ERROR", status: response.status };
+    var allCommits = [];
+    var page = 1;
+    var perPage = 100; // Max per page for GitHub API
+    var hasMore = true;
+
+    while (hasMore) {
+      var url = baseUrl + "?page=" + page + "&per_page=" + perPage;
+      logMsg("Fetching PR commits page " + page + " from: " + url);
+
+      var response = await fetch(url, { method: "GET", headers: headers });
+      logMsg("PR commits page " + page + " response status: " + response.status + ", rate limit remaining: " + (response.headers.get("X-RateLimit-Remaining") || "unknown"));
+      if (!response.ok) {
+        var errText = await response.text();
+        logMsg("GitHub API error fetching PR commits page " + page + ": " + response.status + " - " + errText.substring(0, 200));
+        return { error: "GITHUB_API_ERROR", status: response.status };
+      }
+
+      var commitsData = await response.json();
+      logMsg("Page " + page + " returned " + commitsData.length + " commits");
+
+      if (commitsData.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      var pageCommits = commitsData.map(function (c) {
+        return { message: c.commit && c.commit.message ? c.commit.message : "" };
+      });
+      allCommits = allCommits.concat(pageCommits);
+
+      // Check if there are more pages (GitHub returns fewer than perPage when last page)
+      if (commitsData.length < perPage) {
+        hasMore = false;
+      } else {
+        page++;
+      }
     }
-    var commitsData = await response.json();
-    var commits = commitsData.map(function (c) {
-      return { message: c.commit && c.commit.message ? c.commit.message : "" };
-    });
-    logMsg("Fetched " + commits.length + " PR commits");
-    return { commits: commits };
+
+    logMsg("Total PR commits fetched across all pages: " + allCommits.length);
+    return { commits: allCommits };
   } catch (fetchErr) {
     logMsg("GitHub API fetch error (PR commits): " + fetchErr.message);
     return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
@@ -390,8 +429,8 @@ async function fetchPRCommits(config, owner, repo, prNumber) {
 }
 
 async function fetchPRFiles(config, owner, repo, prNumber) {
-  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/files";
-  logMsg("Fetching PR files from: " + url);
+  var baseUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/files";
+  logMsg("Fetching PR files from: " + baseUrl);
 
   var headers = {
     "Accept": "application/vnd.github.v3+json",
@@ -402,28 +441,56 @@ async function fetchPRFiles(config, owner, repo, prNumber) {
   }
 
   try {
-    var response = await fetch(url, { method: "GET", headers: headers });
-    if (!response.ok) {
-      var errText = await response.text();
-      logMsg("GitHub API error fetching PR files: " + response.status + " - " + errText.substring(0, 200));
-      return { error: "GITHUB_API_ERROR", status: response.status };
+    var allFiles = [];
+    var page = 1;
+    var perPage = 100; // Max per page for GitHub API
+    var hasMore = true;
+
+    while (hasMore) {
+      var url = baseUrl + "?page=" + page + "&per_page=" + perPage;
+      logMsg("Fetching PR files page " + page + " from: " + url);
+
+      var response = await fetch(url, { method: "GET", headers: headers });
+      logMsg("PR files page " + page + " response status: " + response.status + ", rate limit remaining: " + (response.headers.get("X-RateLimit-Remaining") || "unknown"));
+      if (!response.ok) {
+        var errText = await response.text();
+        logMsg("GitHub API error fetching PR files page " + page + ": " + response.status + " - " + errText.substring(0, 200));
+        return { error: "GITHUB_API_ERROR", status: response.status };
+      }
+
+      var filesData = await response.json();
+      logMsg("Page " + page + " returned " + filesData.length + " files");
+
+      if (filesData.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      var pageFiles = filesData.map(function (f) {
+        var type = "modified";
+        if (f.status === "added") type = "added";
+        else if (f.status === "removed") type = "removed";
+        else if (f.status === "renamed") type = "renamed";
+        return {
+          path: f.filename || "",
+          type: type,
+          additions: f.additions || 0,
+          deletions: f.deletions || 0,
+          diffAnchor: ""
+        };
+      });
+      allFiles = allFiles.concat(pageFiles);
+
+      // Check if there are more pages (GitHub returns fewer than perPage when last page)
+      if (filesData.length < perPage) {
+        hasMore = false;
+      } else {
+        page++;
+      }
     }
-    var filesData = await response.json();
-    var files = filesData.map(function (f) {
-      var type = "modified";
-      if (f.status === "added") type = "added";
-      else if (f.status === "removed") type = "removed";
-      else if (f.status === "renamed") type = "renamed";
-      return {
-        path: f.filename || "",
-        type: type,
-        additions: f.additions || 0,
-        deletions: f.deletions || 0,
-        diffAnchor: ""
-      };
-    });
-    logMsg("Fetched " + files.length + " PR files");
-    return { files: files };
+
+    logMsg("Total PR files fetched across all pages: " + allFiles.length);
+    return { files: allFiles };
   } catch (fetchErr) {
     logMsg("GitHub API fetch error (PR files): " + fetchErr.message);
     return { error: "GITHUB_NETWORK_ERROR", message: fetchErr.message };
@@ -458,6 +525,7 @@ async function updatePRField(config, owner, repo, prNumber, fields) {
       headers: headers,
       body: JSON.stringify(fields)
     });
+    logMsg("PR update response status: " + response.status + ", rate limit remaining: " + (response.headers.get("X-RateLimit-Remaining") || "unknown"));
     if (!response.ok) {
       var errText = await response.text();
       logMsg("GitHub API error updating PR: " + response.status + " - " + errText.substring(0, 200));
@@ -556,9 +624,11 @@ async function handleGenerateTitle(data) {
 
   var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
   var commits = prCommits.commits || [];
+  logMsg("handleGenerateTitle - fetched " + commits.length + " commits total");
 
   var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
   var fileChanges = prFiles.files || [];
+  logMsg("handleGenerateTitle - fetched " + fileChanges.length + " files total");
 
   var branchContext = {
     owner: owner,
@@ -652,9 +722,11 @@ async function handleGenerateDescription(data) {
 
   var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
   var commits = prCommits.commits || [];
+  logMsg("handleGenerateDescription - fetched " + commits.length + " commits total");
 
   var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
   var fileChanges = prFiles.files || [];
+  logMsg("handleGenerateDescription - fetched " + fileChanges.length + " files total");
 
   var branchContext = {
     owner: owner,
@@ -747,9 +819,11 @@ async function handleGenerateMergeTitle(data) {
 
   var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
   var commits = prCommits.commits || [];
+  logMsg("handleGenerateMergeTitle - fetched " + commits.length + " commits total");
 
   var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
   var fileChanges = prFiles.files || [];
+  logMsg("handleGenerateMergeTitle - fetched " + fileChanges.length + " files total");
 
   var branchContext = {
     owner: owner,
@@ -815,9 +889,11 @@ async function handleGenerateMergeDescription(data) {
 
   var prCommits = await fetchPRCommits(config, owner, repo, prNumber);
   var commits = prCommits.commits || [];
+  logMsg("handleGenerateMergeDescription - fetched " + commits.length + " commits total");
 
   var prFiles = await fetchPRFiles(config, owner, repo, prNumber);
   var fileChanges = prFiles.files || [];
+  logMsg("handleGenerateMergeDescription - fetched " + fileChanges.length + " files total");
 
   var branchContext = {
     owner: owner,
@@ -1010,6 +1086,8 @@ function buildDescriptionOnlyPrompt(changesSummary, existingTitle, existingDescr
   prompt += "Grouped by category or area. Include specific details drawn from the diff — mention function names, variable names, and what was added/removed/modified and why. Do NOT just list files; explain the changes. **For each file mentioned, add at least one diff hunk reference using the format from the Anchors section.**\n\n";
   prompt += "## Walkthrough\n";
   prompt += "File-by-file list of key changes. **Each entry has:** (1) the file path wrapped in backticks, (2) a 1-2 sentence description of what changed, and (3) a diff hunk reference link. Example: `frontend/app/globals.css` — Updated CSS variables for theme consistency. [[1]](diffhunk://#diff-4a5d3f2_L10-R25)\n\n";
+  prompt += "## Commit Coverage\n";
+  prompt += "**IMPORTANT: You MUST cover every commit listed in the '## Commits' section above.** For each commit, mention what it does and reference the relevant files/diffs. Do not skip any commits — even small fixes or infrastructure changes. Group related commits together if they address the same feature, but ensure every commit message is represented in the description.\n\n";
   prompt += "## Testing\n";
   prompt += "How a reviewer can test or verify these changes. Include specific steps if inferable from the diff.\n\n";
   prompt += "## Breaking Changes\n";
@@ -1077,6 +1155,7 @@ async function callAPI(config, prompt) {
           { role: "user", content: prompt },
         ],
         temperature: 0.3,
+        stream: false,
       }),
     });
   } catch (fetchErr) {
@@ -1096,19 +1175,66 @@ async function callAPI(config, prompt) {
   }
 
   const responseText = await response.text();
+  const contentType = response.headers.get("content-type") || "";
 
-  let cleanResponseText = responseText.replace(/data:\s*\[DONE\].*$/s, "").trim();
-  if (cleanResponseText !== responseText.trim()) {
-    logMsg("Stripped trailing SSE data from response");
-  }
-
+  // Some OpenAI-compatible servers (e.g. NVIDIA NIM) default to streaming
+  // (text/event-stream) even when the client doesn't ask for it, returning
+  // `data: {...}` SSE chunks instead of a single JSON object. Detect that
+  // and aggregate the deltas into one completion so the rest of the code
+  // can keep treating the response as a regular chat completion.
   let json;
-  try {
-    json = JSON.parse(cleanResponseText);
-  } catch (parseErr) {
-    logMsg("JSON.parse failed: " + parseErr.message);
-    logMsg("Response text (first 300): " + responseText.substring(0, 300));
-    throw new Error("Failed to parse API response as JSON: " + parseErr.message);
+  let parsedFromStream = false;
+  const looksLikeSSE = contentType.includes("event-stream") || /^data:\s/m.test(responseText);
+
+  if (looksLikeSSE) {
+    logMsg("Detected SSE stream response; aggregating chunks");
+    let aggregatedContent = "";
+    let lastFullContent = "";
+    const baseJson = { choices: [{ message: { content: "" } }] };
+
+    responseText.split("\n").forEach((rawLine) => {
+      const line = rawLine.replace(/\r$/, "").trim();
+      if (!line.startsWith("data:")) return;
+      const payload = line.replace(/^data:\s*/, "");
+      if (payload === "[DONE]" || payload === "") return;
+      try {
+        const chunk = JSON.parse(payload);
+        const delta =
+          (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) ||
+          (chunk.choices && chunk.choices[0] && chunk.choices[0].message && chunk.choices[0].message.content) ||
+          "";
+        if (delta) {
+          if (chunk.choices[0].delta && chunk.choices[0].delta.content !== undefined) {
+            aggregatedContent += delta;
+          } else if (chunk.choices[0].message && chunk.choices[0].message.content) {
+            lastFullContent = chunk.choices[0].message.content;
+          }
+        }
+      } catch (e) {
+        logMsg("SSE: skipping non-JSON chunk: " + e.message);
+      }
+    });
+
+    const finalContent = aggregatedContent || lastFullContent || "";
+    if (!finalContent) {
+      logMsg("SSE: no content aggregated. Response (first 300): " + responseText.substring(0, 300));
+    }
+    baseJson.choices[0].message.content = finalContent;
+    json = baseJson;
+    parsedFromStream = true;
+  } else {
+    let cleanResponseText = responseText.replace(/data:\s*\[DONE\].*$/s, "").trim();
+    if (cleanResponseText !== responseText.trim()) {
+      logMsg("Stripped trailing SSE data from response");
+    }
+
+    try {
+      json = JSON.parse(cleanResponseText);
+    } catch (parseErr) {
+      logMsg("JSON.parse failed: " + parseErr.message);
+      logMsg("Response text (first 300): " + responseText.substring(0, 300));
+      throw new Error("Failed to parse API response as JSON: " + parseErr.message);
+    }
   }
 
   const content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
@@ -1118,7 +1244,7 @@ async function callAPI(config, prompt) {
     throw new Error("No content in API response");
   }
 
-  logMsg("API content length: " + content.length);
+  logMsg("API content length: " + content.length + (parsedFromStream ? " (from stream)" : ""));
   return content.trim();
 }
 
@@ -1277,6 +1403,8 @@ function buildCombinedPrompt(changesSummary, existingBody) {
   prompt += "Grouped by category or area. Include specific details drawn from the diff — mention function names, variable names, and what was added/removed/modified and why. Do NOT just list files; explain the changes. **For each file mentioned, add at least one diff hunk reference using the format from the Anchors section.**\n\n";
   prompt += "## Walkthrough\n";
   prompt += "File-by-file list of key changes. **Each entry has:** (1) the file path wrapped in backticks, (2) a 1-2 sentence description of what changed, and (3) a diff hunk reference link. Example: `frontend/app/globals.css` — Updated CSS variables for theme consistency. [[1]](diffhunk://#diff-4a5d3f2_L10-R25)\n\n";
+  prompt += "## Commit Coverage\n";
+  prompt += "**IMPORTANT: You MUST cover every commit listed in the '## Commits' section above.** For each commit, mention what it does and reference the relevant files/diffs. Do not skip any commits — even small fixes or infrastructure changes. Group related commits together if they address the same feature, but ensure every commit message is represented in the description.\n\n";
   prompt += "## Testing\n";
   prompt += "How a reviewer can test or verify these changes. Include specific steps if inferable from the diff.\n\n";
   prompt += "## Breaking Changes\n";

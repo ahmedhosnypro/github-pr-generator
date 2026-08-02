@@ -84,6 +84,81 @@
     });
   }
 
+  // Wraps chrome.runtime.sendMessage with two safeguards required for MV3
+  // service workers:
+  //   1. Keepalive pings: Chrome terminates an idle service worker (~30s).
+  //      A long-running API call (large PR, streaming aggregation) can exceed
+  //      that window, killing the message port and surfacing "A listener
+  //      indicated an asynchronous response by returning true, but the message
+  //      channel closed before a response was received". Pinging the SW every
+  //      25s resets its idle timer and keeps the channel open.
+  //   2. One retry: if the channel still drops (SW was already gone), the call
+  //      is retried once — the second attempt wakes a fresh SW.
+  function sendToBackground(message) {
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var pingTimer = null;
+
+      function clearPing() {
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+      }
+
+      function attempt(remaining) {
+        if (done) return;
+        try {
+          chrome.runtime.sendMessage(message, function (resp) {
+            clearPing();
+            if (done) return;
+            var err = chrome.runtime.lastError;
+            var channelClosed = false;
+            if (err && /message channel closed|Receiving end does not exist/i.test(err.message)) {
+              channelClosed = true;
+            }
+            // chrome.runtime.lastError may be set even when the SW actually
+            // responded with { error: ... } (background rejected). Distinguish
+            // by checking resp: if we have an object, the messaging succeeded
+            // and lastError is just informational.
+            if (resp !== undefined && resp !== null) {
+              done = true;
+              resolve(resp);
+              return;
+            }
+            if (channelClosed && remaining > 0) {
+              log("warn", "sendToBackground channel closed; retrying once (" + (message.type || "?") + ")");
+              setTimeout(function () { attempt(remaining - 1); }, 250);
+              return;
+            }
+            done = true;
+            reject(err ? new Error(err.message) : new Error("No response from background"));
+          });
+        } catch (e) {
+          clearPing();
+          if (done) return;
+          if (/Receiving end does not exist|message channel closed/i.test(e.message) && remaining > 0) {
+            log("warn", "sendToBackground threw (" + e.message + "); retrying once");
+            setTimeout(function () { attempt(remaining - 1); }, 250);
+            return;
+          }
+          done = true;
+          reject(e);
+        }
+      }
+
+      // Ping every 25s while outstanding to reset the SW idle timer.
+      pingTimer = setInterval(function () {
+        if (done) { clearPing(); return; }
+        try {
+          chrome.runtime.sendMessage({ type: "__keepalive_ping__" }, function () {
+            // Swallow ping errors; the real call's callback handles failures.
+            void chrome.runtime.lastError;
+          });
+        } catch (e) { /* ignore */ }
+      }, 25000);
+
+      attempt(1);
+    });
+  }
+
   var BTN_ID = "ai-pr-generate-btn-title";
   var BTN_DESC_ID = "ai-pr-generate-btn-desc";
   var BTN_OPENED_TITLE_ID = "ai-pr-generate-btn-opened-title";
@@ -278,12 +353,18 @@
     const partial = document.querySelector(
       'react-partial[partial-name="copilot-generate-pull-title"]'
     );
-    if (!partial) return null;
+    if (!partial) {
+      log("info", "extractCommitsFromEmbeddedJSON - no copilot-generate-pull-title partial found");
+      return null;
+    }
 
     const scriptTag = partial.querySelector(
       'script[type="application/json"][data-target="react-partial.embeddedData"]'
     );
-    if (!scriptTag) return null;
+    if (!scriptTag) {
+      log("info", "extractCommitsFromEmbeddedJSON - no embeddedData script tag found");
+      return null;
+    }
 
     try {
       const data = JSON.parse(scriptTag.textContent);
@@ -291,6 +372,7 @@
         log("info", "Extracted " + data.props.commits.length + " commits from embedded JSON");
         return data.props.commits;
       }
+      log("info", "extractCommitsFromEmbeddedJSON - no commits in embedded data props");
     } catch (e) {
       log("warn", "Failed to parse embedded commits JSON: " + e.message);
     }
@@ -300,7 +382,7 @@
 
   function extractCommitsFromDOM() {
     const items = document.querySelectorAll(".js-commits-list-item");
-    log("info", "Found " + items.length + " commits in DOM");
+    log("info", "Found " + items.length + " commits in DOM (.js-commits-list-item)");
     const commits = [];
 
     items.forEach((item) => {
@@ -320,12 +402,17 @@
       }
     });
 
+    log("info", "extractCommitsFromDOM - extracted " + commits.length + " commits with messages");
     return commits;
   }
 
   function extractCommits() {
     const embedded = extractCommitsFromEmbeddedJSON();
-    if (embedded && embedded.length > 0) return embedded;
+    if (embedded && embedded.length > 0) {
+      log("info", "extractCommits - using embedded JSON (" + embedded.length + " commits)");
+      return embedded;
+    }
+    log("info", "extractCommits - falling back to DOM extraction");
     return extractCommitsFromDOM();
   }
 
@@ -625,7 +712,7 @@
       }
 
       log("info", "Sending message to background script...");
-      var response = await chrome.runtime.sendMessage({
+      var response = await sendToBackground({
         type: "generate",
         data: {
           commits: commits.map(function (c) {
@@ -723,7 +810,7 @@
           return;
         }
         log("info", "handleGenerateOpenedTitle - " + JSON.stringify(ctx));
-        var response = await chrome.runtime.sendMessage({
+        var response = await sendToBackground({
           type: "generateTitle",
           data: {
             owner: ctx.owner,
@@ -771,7 +858,7 @@
           return;
         }
         log("info", "handleGenerateOpenedDescription - " + JSON.stringify(ctx));
-        var response = await chrome.runtime.sendMessage({
+        var response = await sendToBackground({
           type: "generateDescription",
           data: {
             owner: ctx.owner,
@@ -838,7 +925,7 @@
         return;
       }
       log("info", "handleGenerateMergeTitle - " + JSON.stringify(ctx));
-      var response = await chrome.runtime.sendMessage({
+      var response = await sendToBackground({
         type: "generateMergeTitle",
         data: {
           owner: ctx.owner,
@@ -885,7 +972,7 @@
         return;
       }
       log("info", "handleGenerateMergeDescription - " + JSON.stringify(ctx));
-      var response = await chrome.runtime.sendMessage({
+      var response = await sendToBackground({
         type: "generateMergeDescription",
         data: {
           owner: ctx.owner,

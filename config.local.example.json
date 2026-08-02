@@ -5,5 +5,18 @@
   "diffMaxBytes": 100000,
   "diffMaxLines": 3000,
   "githubToken": "",
-  "model": "model_id"
+  "model": "model_id",
+  "testPr": {
+    "owner": "ahmedhosnypro",
+    "repo": "siraj",
+    "number": 17,
+    "headRefName": "tests",
+    "baseRefName": "master",
+    "title": "pull",
+    "description": "Test PR for commit coverage validation",
+    "commits": 33,
+    "filesChanged": 118,
+    "additions": 7212,
+    "deletions": 186
+  }
 }

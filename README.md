@@ -165,6 +165,68 @@ The extension validates your config before making API calls and will show a clea
 
 ---
 
+## Testing
+
+The extension includes local tests to validate commit coverage using a reference PR.
+
+### Configuration
+
+Add a `testPr` section to your `config.local.json`:
+
+```json
+{
+  "apiEndpoint": "http://localhost:20128/v1",
+  "apiKey": "sk-your-api-key",
+  "model": "model_id",
+  "githubToken": "ghp_your_github_pat_here",
+  "testPr": {
+    "owner": "ahmedhosnypro",
+    "repo": "siraj",
+    "number": 17,
+    "headRefName": "tests",
+    "baseRefName": "master",
+    "title": "pull",
+    "description": "Test PR for commit coverage validation",
+    "commits": 33,
+    "filesChanged": 118,
+    "additions": 7212,
+    "deletions": 186
+  }
+}
+```
+
+### Running Tests
+
+```bash
+# Run commit coverage test (checks if PR description covers all commits)
+npm run test:coverage
+
+# Run extension prompt coverage test (checks if extension's changes summary includes all commits)
+npm run test:extension
+
+# Run full extension coverage test (checks prompt structure and PR description coverage)
+npm run test:full
+
+# Run PR creation page prompt test (checks prompt includes commit coverage instruction)
+npm run test:pr-creation
+
+# Run all tests
+npm test
+```
+
+### Test Output
+
+Tests will output:
+- List of all commits in the test PR
+- Coverage analysis showing which commits are mentioned in the PR description
+- Pass/fail status based on coverage threshold (90% = pass, 70% = partial, <70% = fail)
+
+The test uses GitHub CLI (`gh`) to fetch PR data, so you need:
+1. `gh` installed and authenticated (`gh auth login`)
+2. A valid `githubToken` in config with `repo` scope
+
+---
+
 ## Debugging
 
 ### Log Panel
@@ -202,6 +264,8 @@ github-pr-generator/
 ├── styles.css                     # Button and log panel styles
 ├── config.local.json              # Your API config (gitignored)
 ├── config.local.example.json     # Config template (tracked)
+├── test-commit-coverage.js        # Commit coverage test script
+├── test-extension-coverage.js     # Extension prompt coverage test script
 ├── .gitignore
 ├── popup/
 │   ├── popup.html                 # Extension settings UI

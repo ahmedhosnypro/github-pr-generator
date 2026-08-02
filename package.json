@@ -2,5 +2,12 @@
   "dependencies": {},
   "devDependencies": {
     "sharp": "^0.35.2"
+  },
+  "scripts": {
+    "test:coverage": "node test-commit-coverage.js",
+    "test:extension": "node test-extension-coverage.js",
+    "test:full": "node test-full-coverage.js",
+    "test:pr-creation": "node test-pr-creation-prompt.js",
+    "test": "npm run test:coverage && npm run test:extension && npm run test:full && npm run test:pr-creation"
   }
 }
