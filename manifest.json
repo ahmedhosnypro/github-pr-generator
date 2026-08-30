@@ -4,20 +4,13 @@
   "version": "1.6.1",
   "description": "Generate GitHub PR title and description using an OpenAI-compatible API",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": [
-    "https://github.com/*",
-    "https://api.github.com/*",
-    "http://localhost:20128/*"
-  ],
+  "host_permissions": ["https://github.com/*", "https://api.github.com/*", "http://localhost:20128/*"],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://github.com/*/compare/*",
-        "https://github.com/*/pull/*"
-      ],
+      "matches": ["https://github.com/*/compare/*", "https://github.com/*/pull/*"],
       "js": ["content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"

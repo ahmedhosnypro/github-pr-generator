@@ -42,13 +42,22 @@ git clone https://github.com/ahmedhosnypro/github-pr-generator.git
 cd github-pr-generator
 ```
 
-2. Copy the example config and fill in your credentials:
+2. Install dependencies and build the extension:
+
+```bash
+bun install
+bun run build
+```
+
+This compiles the TypeScript sources and produces a ready-to-load extension in `dist/`.
+
+3. Copy the example config and fill in your credentials:
 
 ```bash
 cp config.local.example.json config.local.json
 ```
 
-3. Edit `config.local.json` with your API details:
+4. Edit `config.local.json` with your API details:
 
 ```json
 {
@@ -58,12 +67,14 @@ cp config.local.example.json config.local.json
 }
 ```
 
-4. Load the extension in Chrome:
+Re-run `bun run build` to copy the updated config into `dist/`, or just `bun run dev` to rebuild on every change.
+
+5. Load the extension in Chrome:
 
    - Open `chrome://extensions`
    - Enable **Developer mode** (toggle in top-right)
    - Click **Load unpacked**
-   - Select the `github-pr-generator` folder
+   - Select the `dist/` folder (inside the `github-pr-generator` directory)
 
 5. Navigate to a GitHub PR creation page and click **AI Generate**, or open any PR page and click **AI Title** / **AI Description**
 
@@ -205,19 +216,19 @@ Add a `testPr` section to your `config.local.json`:
 
 ```bash
 # Run commit coverage test (checks if PR description covers all commits)
-npm run test:coverage
+bun run test:coverage
 
 # Run extension prompt coverage test (checks if extension's changes summary includes all commits)
-npm run test:extension
+bun run test:extension
 
 # Run full extension coverage test (checks prompt structure and PR description coverage)
-npm run test:full
+bun run test:full
 
 # Run PR creation page prompt test (checks prompt includes commit coverage instruction)
-npm run test:pr-creation
+bun run test:pr-creation
 
 # Run all tests
-npm test
+bun run test
 ```
 
 ### Test Output
@@ -264,25 +275,50 @@ Open DevTools (`F12`) on the GitHub page. Look for `[PR Generator v1.6]` prefixe
 
 ```
 github-pr-generator/
-├── manifest.json                  # Chrome extension manifest (v3)
-├── background.js                  # Service worker — API calls
-├── content.js                     # Content script — page scraping, UI injection
-├── styles.css                     # Button and log panel styles
-├── config.local.json              # Your API config (gitignored)
-├── config.local.example.json     # Config template (tracked)
-├── test-commit-coverage.js        # Commit coverage test script
-├── test-extension-coverage.js     # Extension prompt coverage test script
-├── .gitignore
+├── manifest.json                  # Chrome extension manifest (v3) — copied to dist/ as-is
+├── src/
+│   ├── types.ts                   # Shared message/config/GitHub-API types
+│   ├── background.ts              # Service worker entry (thin) + modules in src/background/
+│   ├── content.ts                 # Content script entry (thin) + modules in src/content/
+│   └── popup/                     # Popup entry, compiled to dist/popup/popup.js
 ├── popup/
-│   ├── popup.html                 # Modern Material Design 3 settings UI (dark mode, theme toggle, test buttons)
-│   ├── popup.js                   # Settings load/save logic with theme and test handling
-│   �── popup.css                  # Material Design token system with light/dark themes
-├── config.local.json              # Your API config (gitignored)
+│   ├── popup.html                 # Settings UI (copied to dist/)
+│   └── popup.css                  # Material Design 3 styles (copied to dist/)
+├── styles.css                     # Content-script button & log panel styles (copied to dist/)
+├── scripts/
+│   ├── build.ts                   # bun build → dist/ + asset copy
+│   └── convert-icons.ts           # PNG icon generation from SVG (sharp)
+├── tests/                         # bun-run TypeScript test scripts
+│   ├── commit-coverage.ts
+│   ├── extension-coverage.ts
+│   ├── full-coverage.ts
+│   └── pr-creation-prompt.ts
+├── config.local.json              # Your API config (gitignored, copied to dist/ if present)
+├── config.local.example.json      # Config template (tracked)
+├── .gitignore
 └── icons/
     ├── icon16.png
     ├── icon48.png
     └── icon128.png
 ```
+
+### Development & Code Quality
+
+The extension source is TypeScript; bun bundles each entry into a single self-contained script in `dist/`.
+
+```bash
+bun run dev              # rebuild dist/ on every file change
+bun run build            # one-shot production build
+bun run typecheck        # tsc --noEmit (strict)
+bun run lint             # typecheck + biome + oxlint + eslint (type-aware, sonarjs)
+bun run biome:fix        # auto-fix formatting/lint via biome
+bun run check:duplicates # jscpd copy-paste detection
+bun run check:unused     # knip unused code/exports/deps
+bun run quality          # lint + duplicates + unused
+```
+
+Linting enforces, among other rules: `sonarjs/max-lines` 150 lines per file and `sonarjs/max-lines-per-function` 50 lines per function.
+
 
 ---
 

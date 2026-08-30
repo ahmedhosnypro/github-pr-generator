@@ -7,3 +7,5 @@ bun.lock
 
 .vscode
 scratch
+dist/
+.quality-gate-state.json

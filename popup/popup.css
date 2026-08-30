@@ -31,9 +31,9 @@
   --md-sys-color-surface-container-high: #e8e8e8;
   --md-sys-color-surface-container-highest: #e0e0e0;
 
-  --md-sys-elevation-level1: 0 1px 2px rgba(0,0,0,0.3), 0 1px 3px 1px rgba(0,0,0,0.15);
-  --md-sys-elevation-level2: 0 1px 2px rgba(0,0,0,0.3), 0 2px 6px 2px rgba(0,0,0,0.15);
-  --md-sys-elevation-level3: 0 4px 8px 3px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.3);
+  --md-sys-elevation-level1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level3: 0 4px 8px 3px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.3);
 
   --md-sys-shape-corner-small: 4px;
   --md-sys-shape-corner-medium: 8px;
@@ -53,79 +53,92 @@
   --md-sys-motion-duration-long1: 450ms;
   --md-sys-motion-duration-long2: 500ms;
 
-  --md-sys-typescale-display-large-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-display-large-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-display-large-size: 57px;
   --md-sys-typescale-display-large-weight: 400;
   --md-sys-typescale-display-large-line-height: 64px;
   --md-sys-typescale-display-large-tracking: -0.25px;
 
-  --md-sys-typescale-headline-large-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-headline-large-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-headline-large-size: 32px;
   --md-sys-typescale-headline-large-weight: 400;
   --md-sys-typescale-headline-large-line-height: 40px;
   --md-sys-typescale-headline-large-tracking: 0px;
 
-  --md-sys-typescale-headline-medium-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-headline-medium-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-headline-medium-size: 28px;
   --md-sys-typescale-headline-medium-weight: 400;
   --md-sys-typescale-headline-medium-line-height: 36px;
   --md-sys-typescale-headline-medium-tracking: 0px;
 
-  --md-sys-typescale-headline-small-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-headline-small-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-headline-small-size: 24px;
   --md-sys-typescale-headline-small-weight: 400;
   --md-sys-typescale-headline-small-line-height: 32px;
   --md-sys-typescale-headline-small-tracking: 0px;
 
-  --md-sys-typescale-title-large-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-title-large-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-title-large-size: 22px;
   --md-sys-typescale-title-large-weight: 500;
   --md-sys-typescale-title-large-line-height: 28px;
   --md-sys-typescale-title-large-tracking: 0px;
 
-  --md-sys-typescale-title-medium-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-title-medium-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-title-medium-size: 16px;
   --md-sys-typescale-title-medium-weight: 500;
   --md-sys-typescale-title-medium-line-height: 24px;
   --md-sys-typescale-title-medium-tracking: 0.15px;
 
-  --md-sys-typescale-title-small-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-title-small-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-title-small-size: 14px;
   --md-sys-typescale-title-small-weight: 500;
   --md-sys-typescale-title-small-line-height: 20px;
   --md-sys-typescale-title-small-tracking: 0.1px;
 
-  --md-sys-typescale-label-large-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-label-large-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-label-large-size: 14px;
   --md-sys-typescale-label-large-weight: 500;
   --md-sys-typescale-label-large-line-height: 20px;
   --md-sys-typescale-label-large-tracking: 0.1px;
 
-  --md-sys-typescale-label-medium-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-label-medium-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-label-medium-size: 12px;
   --md-sys-typescale-label-medium-weight: 500;
   --md-sys-typescale-label-medium-line-height: 16px;
   --md-sys-typescale-label-medium-tracking: 0.5px;
 
-  --md-sys-typescale-label-small-font: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-label-small-font:
+    "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-label-small-size: 11px;
   --md-sys-typescale-label-small-weight: 500;
   --md-sys-typescale-label-small-line-height: 16px;
   --md-sys-typescale-label-small-tracking: 0.5px;
 
-  --md-sys-typescale-body-large-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-body-large-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-body-large-size: 16px;
   --md-sys-typescale-body-large-weight: 400;
   --md-sys-typescale-body-large-line-height: 24px;
   --md-sys-typescale-body-large-tracking: 0.5px;
 
-  --md-sys-typescale-body-medium-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-body-medium-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-body-medium-size: 14px;
   --md-sys-typescale-body-medium-weight: 400;
   --md-sys-typescale-body-medium-line-height: 20px;
   --md-sys-typescale-body-medium-tracking: 0.25px;
 
-  --md-sys-typescale-body-small-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-sys-typescale-body-small-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --md-sys-typescale-body-small-size: 12px;
   --md-sys-typescale-body-small-weight: 400;
   --md-sys-typescale-body-small-line-height: 16px;
@@ -236,7 +249,9 @@
   --md-sys-color-surface-container-highest: #363438;
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -283,8 +298,9 @@ body {
   letter-spacing: var(--md-sys-typescale-body-large-tracking);
   color: var(--md-sys-color-on-surface);
   background-color: var(--md-sys-color-surface);
-  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
-              color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+  transition:
+    background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 header {
@@ -355,8 +371,9 @@ header {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              transform var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  transition:
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
   flex-shrink: 0;
 }
 
@@ -377,8 +394,9 @@ header {
   width: 20px;
   height: 20px;
   fill: currentColor;
-  transition: opacity var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+  transition:
+    opacity var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
 }
 
 .theme-toggle .sun-icon {
@@ -433,8 +451,9 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard),
-              color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  transition:
+    background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard),
+    color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
 }
 
 .section-toggle:hover {
@@ -519,9 +538,10 @@ main {
   border: 1px solid var(--md-sys-color-outline);
   border-radius: var(--md-sys-shape-corner-small);
   outline: none;
-  transition: border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              box-shadow var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+  transition:
+    border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    box-shadow var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
 }
 
 .md-text-field__input::placeholder {
@@ -596,8 +616,9 @@ main {
   border-radius: var(--md-sys-shape-corner-full);
   background-color: var(--md-sys-color-outline-variant);
   border: 2px solid transparent;
-  transition: background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+  transition:
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
   flex-shrink: 0;
 }
 
@@ -610,8 +631,9 @@ main {
   border-radius: 50%;
   background-color: var(--md-sys-color-on-surface);
   box-shadow: var(--md-sys-elevation-level2);
-  transition: transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+  transition:
+    transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
 }
 
 .md-switch input {
@@ -662,9 +684,10 @@ main {
   border: none;
   border-radius: var(--md-sys-shape-corner-full);
   cursor: pointer;
-  transition: background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              box-shadow var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
-              transform var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  transition:
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    box-shadow var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
   white-space: nowrap;
 }
 
@@ -694,7 +717,9 @@ main {
 }
 
 .md-button--filled:focus:not(:disabled) {
-  box-shadow: var(--md-sys-elevation-level2), 0 0 0 3px color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
+  box-shadow:
+    var(--md-sys-elevation-level2),
+    0 0 0 3px color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
 }
 
 .md-button--outlined {
@@ -762,8 +787,13 @@ main {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .toast {
@@ -784,8 +814,9 @@ main {
   border-radius: var(--md-sys-shape-corner-medium);
   box-shadow: var(--md-sys-elevation-level3);
   z-index: 100;
-  transition: transform var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard),
-              opacity var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard);
+  transition:
+    transform var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard),
+    opacity var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard);
 }
 
 .toast.show {
@@ -854,8 +885,9 @@ footer {
 }
 
 .conditional-fields {
-  transition: opacity var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
-              visibility var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+  transition:
+    opacity var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    visibility var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .conditional-fields.hidden {
@@ -882,8 +914,9 @@ footer {
   background-color: transparent;
   color: var(--md-sys-color-on-surface-variant);
   cursor: pointer;
-  transition: background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard),
-              color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  transition:
+    background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard),
+    color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
 }
 
 .icon-button:hover {

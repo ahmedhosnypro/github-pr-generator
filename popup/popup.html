@@ -15,7 +15,7 @@
         <span class="subtitle">Settings</span>
       </div>
     </div>
-    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
       <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/>
       </svg>
@@ -53,7 +53,7 @@
           <div class="field">
             <label class="field-label" for="apiKey">API Key</label>
             <div class="md-text-field field-with-icon">
-              <input type="password" id="apiKey" class="md-text-field__input monospace" placeholder="sk-..." autocomplete="password" aria-describedby="apiKeyHint">
+              <input type="password" id="apiKey" class="md-text-field__input monospace" placeholder="sk-..." autocomplete="off" aria-describedby="apiKeyHint">
               <button type="button" class="icon-button visible" id="toggleApiKeyBtn" aria-label="Show/hide API key" title="Show/hide API key">
                 <svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
@@ -78,7 +78,7 @@
     <section class="section" aria-labelledby="diffSettingsTitle">
       <div class="section-header">
         <h2 class="section-title" id="diffSettingsTitle">Diff Settings</h2>
-        <button class="section-toggle" id="diffSettingsToggle" aria-expanded="true" aria-controls="diffSettingsContent">
+        <button type="button" class="section-toggle" id="diffSettingsToggle" aria-expanded="true" aria-controls="diffSettingsContent">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
           </svg>
@@ -87,7 +87,7 @@
       <div class="section-content" id="diffSettingsContent">
         <div class="card">
           <div class="field">
-            <label class="field-label">Include Diff in Prompt</label>
+            <label class="field-label" for="diffEnabled">Include Diff in Prompt</label>
             <div class="md-switch">
               <input type="checkbox" id="diffEnabled" class="md-switch__input" aria-describedby="diffEnabledHint">
               <span class="md-switch__track" aria-hidden="true">
@@ -125,7 +125,7 @@
           <div class="field">
             <label class="field-label" for="githubToken">GitHub Personal Access Token <span class="field-hint" style="display: inline; font-weight: 400; margin-left: 4px;">(optional)</span></label>
             <div class="md-text-field field-with-icon">
-              <input type="password" id="githubToken" class="md-text-field__input monospace" placeholder="ghp_..." autocomplete="password" aria-describedby="githubTokenHint">
+              <input type="password" id="githubToken" class="md-text-field__input monospace" placeholder="ghp_..." autocomplete="off" aria-describedby="githubTokenHint">
               <button type="button" class="icon-button visible" id="toggleGithubTokenBtn" aria-label="Show/hide GitHub token" title="Show/hide GitHub token">
                 <svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>

@@ -1,13 +1,43 @@
 {
-  "dependencies": {},
-  "devDependencies": {
-    "sharp": "^0.35.2"
-  },
+  "name": "github-pr-generator",
+  "version": "1.6.1",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "test:coverage": "node test-commit-coverage.js",
-    "test:extension": "node test-extension-coverage.js",
-    "test:full": "node test-full-coverage.js",
-    "test:pr-creation": "node test-pr-creation-prompt.js",
-    "test": "npm run test:coverage && npm run test:extension && npm run test:full && npm run test:pr-creation"
+    "build": "bun run scripts/build.ts",
+    "dev": "bun --watch run scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "format": "biome format --write .",
+    "biome:check": "biome check .",
+    "biome:fix": "biome check --write .",
+    "oxlint": "oxlint --deny-warnings --ignore-path .gitignore",
+    "eslint": "eslint .",
+    "lint": "bun run typecheck && bun run biome:check && bun run oxlint && bun run eslint",
+    "check:duplicates": "jscpd",
+    "check:unused": "knip",
+    "quality": "bun run lint && bun run check:duplicates && bun run check:unused",
+    "quality-gate": "bun run scripts/quality-gate.ts",
+    "quality-gate:fresh": "bun run scripts/quality-gate.ts --fresh",
+    "prepare": "husky",
+    "test:coverage": "bun run tests/commit-coverage.ts",
+    "test:extension": "bun run tests/extension-coverage.ts",
+    "test:full": "bun run tests/full-coverage.ts",
+    "test:pr-creation": "bun run tests/pr-creation-prompt.ts",
+    "test": "bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.0",
+    "@types/chrome": "^0.2.7",
+    "eslint": "^10.9.1",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "husky": "^9.1.7",
+    "jscpd": "^5.1.0",
+    "knip": "^6.33.0",
+    "oxlint": "^1.80.0",
+    "sharp": "^0.35.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.68.0"
   }
 }
