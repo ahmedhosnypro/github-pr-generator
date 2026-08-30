@@ -4,20 +4,37 @@
 
 ## Overview
 
-This plan translates corpus study findings into concrete improvements for the extension's prompt layer and output pipeline. The goal is to close the gap between current prompt behavior and real-world merged PR patterns, focusing on prompt wording and structure only.
+This plan translates corpus study findings into concrete improvements for the extension's prompt layer and output pipeline. The goal is to close the gap between current prompt behavior and real-world merged PR patterns, focusing on prompt wording and structure only. The P1.x/P2.x/P3.x numbering used throughout comes from `analysis/recommendations.md`.
+
+## Source Material & Corpus Caveats
+
+**Inputs to this plan**: `analysis/pull-requests/SYNTHESIS.md` (cross-repo synthesis), `analysis/recommendations.md` (prioritized recommendation catalog), 94 per-repo reports at `analysis/pull-requests/<owner>--<repo>/patterns.md`, and the SYNTHESIS appendix (94-row per-repo index of dominant pattern / template? / length bucket). Corpus: 470 merged PRs, 5 per repo, across 94 repos (6 of the original top-100 list excluded: awesome-selfhosted, deepseek-ai/deepseek-harness, DigitalPlatDev/FreeDomain, massgravel/Microsoft-Activation-Scripts, and torvalds/linux have zero merged PRs; golang/go had only one trivial merged PR).
+
+**Known biases** (SYNTHESIS.md "Sample") — treat every count in this plan as directional, not absolute:
+- **5-PR share**: n=5 per repo; several reports flag single-author dominance (v2rayN, ollama, openai/codex, hello-algo are all 5/5 one author), same-day merge batches, and narrow time windows.
+- **Recency skew**: samples are recently-merged PRs, mostly 2026; some repos instead surfaced 2015-2024 drive-bys (Vue, airbnb, getify, jlevy).
+- **Top-starred skew**: ~20 repos are curated lists/docs (awesome-*, free-programming-books, CS-Notes, JavaGuide, etc.) whose PRs are one-line submissions — they anchor the S bucket but should not set the bar for code repos.
+- **Change-type skew**: huge repos' merged streams are bot-dominated (microsoft/generative-ai-for-beginners 5/5 bot; Chalarangelo/30-seconds-of-code 4/5 Dependabot; flutter 4/5 autoroller; nilbuild/developer-roadmap 4/5 sync bot), thinning the human-writing signal.
+- **Language mix**: English-dominant, with Chinese-heavy clusters (clash-verge-rev, CS-Notes, justjavac, JavaGuide, Python-100-Days, 996icu) and one bilingual-template repo (farion1231/cc-switch). Chinese-language repos run systematically shorter in word counts but remain information-dense.
+
+**Methodological note**: the synthesis' "excellent PR" traits are correlational, not causal — we observe what merged, not what caused merging. But in repos with near-zero review, the description was often the only thing a maintainer read before merging, which is suggestive. Every Phase below mitigates this by validating against real merged exemplars (Phase E3), not just corpus statistics.
 
 ## Key Insights from Corpus Analysis
 
 ### Three PR Cultures (Critical Implementation Focus)
 1. **Evidence-driven engineering** (minority): Summary/Problem → Changes → Verification arc with quoted commands, pass counts, honest scope limits
-2. **Template-gated compliance** (25 repos): freeCodeCamp, Kubernetes, llama.cpp, PowerToys, open-webui, yt-dlp, ripienaar - description is boilerplate + short authored core
-3. **Title-only pragmatism** (45+ repos): HelloGitHub, CS-Notes, 996icu, yangshun - merged bodies routinely one line or empty
+2. **Template-gated compliance** (30 repos enforce, 10 more have-but-bypass): freeCodeCamp, Kubernetes, llama.cpp, PowerToys, open-webui, yt-dlp, ripienaar - description is boilerplate + short authored core; quality hinges on how honestly authors fill the scaffold
+3. **Title-only pragmatism** (nearly half the corpus; 54 template-free repos, 34 of them genuinely freeform): HelloGitHub (3/5 empty), CS-Notes (4/5), 996icu (4/5), yangshun (3/5) - merged bodies routinely one line or empty
 
 ### Critical Length Distribution
 - **S (<50 words)**: 42/94 repos - current 7-section skeleton forces inflation
 - **M (50-200)**: 37/94 repos - sweet spot for most authored content
-- **L (>200)**: 11/94 repos - v2rayN, langflow, hermes-agent, openclaw, PowerToys
-- **BOT**: 3 repos - Dependabot, copybara, sync bots
+- **L (>200)**: 11/94 repos - v2rayN, ECC, anthropics/skills, garrytan/gstack, Graphify, langflow, hermes-agent, superpowers, ohmyzsh, openclaw, open-webui (SYNTHESIS "Description length"; PowerToys sits in M per the appendix)
+- **BOT**: 3 repos - 30-seconds-of-code (Dependabot), microsoft/generative-ai-for-beginners (bot stream), nilbuild/developer-roadmap (sync bots)
+
+**No diff-size↔length correlation**: the corpus shows description length tracks *risk, complexity, and author role* rather than diff size — next.js merged −5,139 lines with one paragraph, hello-algo documented a 180-file change in 85 words, kubernetes mounted +4,879/−13,225 with ~15 words (`/kind` labels carried it), getify accepted a 6,675-line translation with one sentence, while v2rayN's longest PR is only +82/−2 (a risky helper). Phase A1's scaling instruction must therefore stay a soft preference keyed to small diffs, not a hard size gate.
+
+**Author-role gradient** (recurs in ≥8 repos: excalidraw, react, shadcn-ui, transformers, langchain, ComfyUI, immich, vscode-adjacent): maintainers merge their own PRs with one line while external contributors write the full packet — description effort substitutes for trust. This is the corpus basis for Phase B's never-overwrite-authored-prose rule.
 
 ### Repository-Specific Patterns (High Impact)
 - **kubernetes**: `subsystem: verb` titles, mandatory template with `/kind` slash-commands, extremely terse prose
@@ -26,6 +43,73 @@ This plan translates corpus study findings into concrete improvements for the ex
 - **yt-dlp**: `[area]` bracket titles, mandatory anti-AI template, PRs without template get CLOSED
 - **nodejs**: `subsystem: verb`, freeform prose, AI disclosure common
 - **react/react-native**: `[version]` prefix, 3-section template
+
+### Title Convention Distribution (SYNTHESIS.md "Title conventions")
+
+Dominant convention per repo, all 94 repos counted — the basis for A8's ordered-preference title rule:
+
+| Convention family | Repos | Example repos | Representative titles |
+|---|---|---|---|
+| True Conventional Commits `type(scope):` | **30** | v2rayN, freeCodeCamp, excalidraw, n8n, ohmyzsh, electron, shadcn-ui, immich | `fix(hysteria2): default the port to 443 when the share URI omits it` |
+| Plain imperative, no prefix | **26** | scrcpy, bootstrap, public-apis, rust-lang, godot ("Fix X" style) | `Add flex display support (resizable virtual display)` |
+| Mixed / no dominant convention | **26** | airbnb, huggingface/transformers, vercel/next.js, d3, vuejs/vue | CC and plain titles coexist in the same repo |
+| Scope/area prefix, no type (`subsystem:`) | **7** | nodejs, kubernetes, llama.cpp, vscode, PowerToys, three.js, ollama | `zlib: avoid waiting for paused ZIP iterators` |
+| Bracketed area/version prefix `[Area]` | **5** | react, react-native (`[0.86]`), tensorflow (`[XLA:CPU]`), youtube-dl, yt-dlp | `[DOM] Copy \`source\` onto the synthetic toggle event` |
+
+Correlations worth exploiting: CC dominance clusters in repos whose release notes are generated from titles (electron, immich, n8n, excalidraw); scope-only prefixes cluster where the PR title becomes the squash-merge commit message (nodejs, llama.cpp, vscode, kubernetes). Chinese-language titles appear in ~6 repos. Only microsoft/generative-ai-for-beginners and nilbuild/developer-roadmap have fully machine-generated title streams.
+
+### Section Frequency Across the Corpus (SYNTHESIS.md "Section-name frequency")
+
+Normalized header families, repo counted once when the header recurs — the corpus-ranked priority for which sections our skeleton keeps vs. gates:
+
+| Section family | Repos | Notable variants |
+|---|---|---|
+| Summary / Overview / What changed | **29** | vscode `## What changed`; PowerToys `## Summary of the Pull Request`; kubernetes `#### What this PR does / why we need it:` |
+| Test plan / Testing / Validation / Verification | **27** | ECC `## Validation`; openclaw `## Evidence`; anthropics/skills `## How we know it works`; immich `## How Has This Been Tested?` |
+| Checklist (template checkboxes as a section) | **27** | freeCodeCamp; ohmyzsh `## Standards checklist:`; ripienaar `## Requirements`; AutoGPT `### Checklist`; PowerToys `## PR Checklist` |
+| Problem / Why / Motivation / Root cause | **16** | langflow `## Problem` → `## Root cause`; vercel/next.js `### Why?`; ponytail `## Problem`/`## Root Cause` |
+| Scope / Non-goals / Limitations / "not tested" | **12** | markitdown `## Deliberately not changed`; rustdesk `## Known limitations`; openclaw `## What was not tested`; n8n `## Not verified` |
+| Type-of-change selector | **6** | kubernetes `#### What type of PR is this?` + `/kind`; vue checkboxes; ytdl-org `What is the purpose…` |
+| Prior-art / supersession notes | **5** | obra/superpowers `## Existing PRs`; hermes-agent `salvage #N` in titles; ComfyUI `A PR like #8464` |
+| Changelog / Release notes entry | **4** | electron `#### Release Notes` + clerk `Notes:` trailer; react-native `## Changelog:`; n8n `(no-changelog)` trailer |
+| Screenshots / Demo / Visual proof | **4** | open-webui `### Screenshots or Videos` Before/After tables; immich `## Screenshots`; openclaw `## Visual proof` |
+| Breaking-change callout | **3** | open-webui `### Breaking Changes` (usually N/A); vue checkbox; react-native `[BREAKING]` slot (unexercised in sample) |
+
+Standout: hand-written `## Summary` is effectively the universal opener when no template exists — but "Summary" means radically different things per repo (3-word bullets in openai/codex; a 3-paragraph causal narrative in langflow).
+
+### Template Landscape (SYNTHESIS.md "Template usage")
+
+- **Repo template present and broadly used: 30 repos** — electron, freeCodeCamp, llama.cpp, github/gitignore, transformers, immich, PowerToys, n8n, ohmyzsh, openclaw, open-webui, public-apis, ripienaar/free-for-dev, obra/superpowers, TheAlgorithms, ytdl-org, yt-dlp, bootstrap, flutter, AUTOMATIC1111, godot, kubernetes, vue, sindresorhus/awesome, and more.
+- **Template exists but bypassed/thinly filled: 10 repos** — ECC, anthropics/claude-code, cc-switch, spec-kit, ComfyUI, react, project-based-learning, ultraworkers/claw-code, labuladong, getify.
+- **No repo template: 54 repos**, of which **20 have strong author-level scaffolds** (anomalyco/opencode, mattpocock/skills, vscode, langflow, dify, Graphify, hermes-agent, gstack, hello-algo, three.js, shadcn-ui's universal `### Description`, …) and **34 are genuinely freeform** (including the 3 bot-stream-dominated repos).
+
+Canonical template skeleton across repos (target shape for A6 fill behavior):
+
+```
+## Summary / Description            <- what this PR does
+## (What problem / Why / Motivation) <- optional in small PRs
+## How Has This Been Tested? / Validation / Test plan
+## Screenshots (UI repos; often Before/After)
+## Checklist:                        <- read CONTRIBUTING; tested locally; code style;
+   - [x] no unrelated changes; docs updated; (increasingly:) AI-use disclosure
+Closes #XXXXX
+```
+
+Boilerplate a generator must preserve byte-for-byte (drives A6 and Phase D's "never strip real templates"):
+- **Invisible HTML-comment instructions left in merged PRs**: kubernetes, bootstrap, nodejs, rust-lang, f--prompts.chat, open-webui — distinguish rendered content from comment scaffold.
+- **Attestation checkboxes**: freeCodeCamp (`I have tested these changes…`), n8n (`I have seen this code, I have run this code, and I take responsibility for this code`), openclaw (mandated AI line), llama.cpp (`AI usage disclosure: YES/NO`), immich (mandatory "to which degree, if any, an LLM was used" section), ohmyzsh (AI-tool disclosure checkbox), spec-kit (`## AI Disclosure`), electron (`I have reviewed and verified the changes` linking `policy/ai.md`), obra/superpowers (metadata table demanding model + harness + human reviewer).
+- **Hard anti-AI stances**: yt-dlp (`NO AI / NO LLM POLICY` checkbox; "PRs without the template will be CLOSED"; permanent-block threats) and ripienaar/free-for-dev ("written using AI… we will close it without reviewing" + an "LLMs tick this box" honeypot left unchecked).
+- **Release-note contracts**: electron clerk-enforced `Notes:` trailer; react-native `[CATEGORY] [TYPE] - …` changelog line; n8n `(no-changelog)` title trailer; kubernetes fenced `release-note` block plus prow slash-commands (`/kind`, `/sig`, `/cc`).
+- **Thin fills tolerated**: vue and transformers merge near-empty template fills; gitignore merged visible `_TODO_` placeholders — templates constrain structure, not authored depth.
+
+### Bot & AI Landscape (SYNTHESIS.md "Bot-generated descriptions")
+
+Three distinct phenomena a generator must not blunder into:
+1. **Appended AI-summary blocks kept verbatim (8 repos)**: f--prompts.chat (CodeRabbit 5/5), build-your-own-x (2/5, as the entire body), x1xhlol (4/5), langflow (3/5), rustdesk (CodeRabbit + Greptile with confidence scores and mermaid, 4/5), n8n (cubic badge 5/5), superpowers (1), firecrawl (`## Summary by cubic` IS the description in 4/5). Uniform structure: HTML comment marker → `## Summary by …` → category bullets (`**Bug Fixes**`, `**Documentation**`) → footer/badge. Maintainers almost never edit them out.
+2. **Fully machine-authored PRs (13 repos)**: Dependabot, Renovate, backport bots (electron trop `Backport of #N.`), google copybara (tensorflow: bodies literally `Automated Code Change`), GitHub-Actions syncs, flutter autoroller, n8n cat-bot, openclaw roboclaw-bot, openai/codex copyberry pipeline (identical Why/What-changed/Testing triads, 1-2 minute merges, `<!-- copyberry-projection-id -->` footers).
+3. **Disclosed AI-assisted human submissions (~12 repos)**: nodejs (`Assisted-by:` trailers), dify, MoneyPrinterTurbo, mattpocock/skills, gstack, ponytail, spec-kit, ohmyzsh, n8n, openclaw, awesome-llm-apps, langchain — all merged with disclosure intact; several templates make disclosure mandatory (llama.cpp, immich, ohmyzsh, spec-kit, openclaw, superpowers, electron).
+
+Competitive bar, verbatim from the synthesis: matching CodeRabbit's category-bullets wins nothing in evidence-driven repos — the merged-as-praised artifacts contain root cause in one line, reproduction commands, quantified before/after evidence, and explicit what-was-not-done sections. Two repos hard-reject AI text outright (yt-dlp, ripienaar), and ripienaar's template contains a honeypot designed to catch it.
 
 ## Priority Matrix
 
@@ -50,6 +134,7 @@ This plan translates corpus study findings into concrete improvements for the ex
 - **Template fidelity**: HTML comments, checkboxes, and boilerplate preserved byte-for-byte
 - **Length appropriateness**: Small diffs produce concise output (<50 words), complex diffs get comprehensive coverage
 - **Evidence quality**: Testing sections include verifiable commands and counts where possible
+- **Title convention fit**: generated titles follow the repo's dominant convention family when inferable from commit messages (corpus split: 30 CC / 26 plain-imperative / 26 mixed / 7 scope-prefix / 5 bracketed — see Title Convention Distribution)
 
 ## Phase A — Prompt wording (P1.1-P1.7) - HIGH PRIORITY, LOW EFFORT
 
@@ -66,7 +151,7 @@ This plan translates corpus study findings into concrete improvements for the ex
 // To:
 "Use these sections, scaled to the change: omit sections that would be empty, and for small diffs (a handful of files or ~50 changed lines) prefer a compact output — Summary plus Testing when verifiable, with commits folded into Summary — over a long scaffold. Commit Coverage remains mandatory in all sizes, even if rendered as one sentence.\n\n",
 ```
-**Evidence**: 42/94 repos prefer S-length; airbnb#2620, immich#31080, shadcn#11715 exemplars
+**Evidence**: 42/94 repos prefer S-length; airbnb#2620, immich#31080, shadcn#11715 exemplars. Guardrail: corpus shows NO diff-size↔length correlation (next.js merged −5,139 lines in one paragraph; kubernetes did +4,879/−13,225 in ~15 words) — the "+50 lines" heuristic is a soft preference, and Phase E3 must confirm complex-but-small-diff PRs keep depth.
 
 #### A2. P1.3 - Root cause first for bug fixes (HIGH IMPACT)
 **File**: `src/background/prompts/common.ts:18-19`
@@ -101,6 +186,8 @@ This plan translates corpus study findings into concrete improvements for the ex
 ```
 **Evidence**: PowerToys#50230 ("40/40 passed"), hello-algo#1959 ("56/56 tests"), langflow quantified results
 
+**Optional extension** (synthesis trait #3, "prove the test can fail"): when the diff adds a regression test, the strongest merged PRs also show red-before/fail-first runs — v2rayN#10026 (failing-then-passing), spec-kit#4340 ("Verified the test fails without the fix"), ECC#2693 (RED then GREEN run), openclaw#128223 ("Red-before on current main: 1 failed, 17 passed"), langflow#14834 (adversarially deleting the key). Keep this out of the base wording until E3 confirms it doesn't inflate small-PR output.
+
 #### A5. P1.6 - Improved issue linking (CONVENTION AWARE)
 **File**: `src/background/prompts/common.ts:30-31`
 **Change**:
@@ -133,7 +220,7 @@ This plan translates corpus study findings into concrete improvements for the ex
 #### A8. P2.3 - Flexible title style (REPO-SPECIFIC CONVENTIONS)
 **Files**: `src/background/prompts/combined.ts:16`, `src/background/prompts/pr-prompts.ts:14-16`, `src/background/prompts/merge-prompts.ts:28`
 **Change**: Replace hard conventional commit requirement: `"Match the repo's title style if inferable from commit messages in this prompt (e.g. 'subsystem: verb', '[Area]', conventional commits); otherwise default to conventional commits."`
-**Evidence**: Only 30/94 repos use strict CC; kubernetes/llama.cpp use `subsystem:`, react uses `[Area]`
+**Evidence**: Only 30/94 repos use strict CC — full split: CC 30, plain-imperative 26, mixed 26, scope/area-prefix 7 (nodejs, kubernetes, llama.cpp, vscode, PowerToys, three.js, ollama), bracketed 5 (react, react-native, tensorflow, youtube-dl, yt-dlp). CC dominance concentrates in repos whose release notes are title-generated (electron, immich, n8n, excalidraw); scope prefixes cluster where the PR title becomes the squash-merge commit (nodejs, llama.cpp, vscode, kubernetes).
 
 #### A9. P2.4 - Scale anchor usage (DIFF-SIZE AWARE)
 **Files**: Update RULES blocks in `combined.ts` and `pr-prompts.ts`
@@ -149,6 +236,8 @@ This plan translates corpus study findings into concrete improvements for the ex
 
 **Goal**: Distinguish between template boilerplate and authored content to avoid overwriting user prose
 
+**Corpus basis**: the author-role gradient — maintainers merge their own one-liners while external contributors write full packets (excalidraw, react, shadcn-ui, transformers, langchain, ComfyUI, immich). Overwriting a maintainer's one-liner with a 7-section essay is a regression, which is why detection (B1) must be conservative and default to light-touch completion when unsure.
+
 ### Tasks:
 
 #### B1. Create template detection helper (SMART DETECTION)
@@ -162,7 +251,7 @@ export function isLikelyTemplate(body: string): boolean {
           (body.match(/^#{1,6}\s+/gm) || []).length >= 2); // Or multiple headers
 }
 ```
-**Evidence**: Template repos have HTML comments (kubernetes), checkboxes (freeCodeCamp), multiple headers
+**Evidence**: Template repos carry invisible HTML comments (kubernetes, bootstrap, nodejs, rust-lang, f--prompts.chat, open-webui), checkboxes (freeCodeCamp, yt-dlp, PowerToys), and multi-header scaffolds — corpus split: 30 template-gated, 10 bypassed, 54 no-template (20 with author-level scaffolds, 34 freeform)
 
 #### B2. Implement conditional body handling (REPO-SPECIC LOGIC)
 **Files**: `src/background/prompts/combined.ts`, `src/background/prompts/pr-prompts.ts`
@@ -197,26 +286,32 @@ if (existingBody && existingBody.trim().length > 0) {
 #### C1. Generate repo profiles from corpus (DATA-DRIVEN)
 **File**: Create `src/background/repo-profiles.ts`
 **Process**: 
+- Seed from the SYNTHESIS appendix (94-row per-repo index: dominant pattern / template? / length bucket)
 - Subagent reads all 94 `patterns.md` files + synthesis appendix
+- Promote a repo to a profile only where the per-repo `patterns.md` confirms the appendix row (guards against the n=5 sampling bias)
 - Generates typed map for repos with clear evidence only
 - Profile structure:
 ```typescript
 interface RepoProfile {
   owner: string;
   repo: string;
-  titleStyle: "conventional" | "scope-prefix" | "imperative" | "mixed";
+  // Maps to the SYNTHESIS title families: conventional (30), imperative (26),
+  // mixed (26), scope-prefix/area-prefix (7), bracket-prefix (5)
+  titleStyle: "conventional" | "imperative" | "mixed" | "scope-prefix" | "area-prefix" | "bracket-prefix";
   length: "S" | "M" | "L";
   templateHeavy?: boolean;
   disclosureRequired?: boolean;
   note?: string;
 }
 ```
-**Key Profiles** (based on exemplars):
+**Key Profiles** (based on exemplars and the SYNTHESIS appendix rows):
 - `kubernetes`: `{ titleStyle: "scope-prefix", length: "S", templateHeavy: true }`
 - `ohmyzsh`: `{ titleStyle: "conventional", length: "L", disclosureRequired: true }`
 - `PowerToys`: `{ titleStyle: "area-prefix", length: "M", templateHeavy: true }`
 - `yt-dlp`: `{ titleStyle: "bracket-prefix", length: "S", templateHeavy: true, disclosureRequired: true }`
 - `nodejs`: `{ titleStyle: "scope-prefix", length: "M" }`
+- `immich`: `{ titleStyle: "conventional", length: "S", templateHeavy: true, disclosureRequired: true }` (mandatory "degree of LLM use" section)
+- `ripienaar/free-for-dev`: `{ titleStyle: "imperative", length: "S", templateHeavy: true, disclosureRequired: true }` (anti-AI honeypot: never tick the honeypot box)
 
 #### C2. Integrate profiles into prompt builders (CONTEXT-AWARE)
 **Files**: Update `src/background/prompts/combined.ts`, `pr-prompts.ts`, `merge-prompts.ts`
@@ -273,6 +368,8 @@ const BOT_SIGNATURE_PATTERNS = [
   /(?:^\s*[-*]\s+\[.\]\s+.*?(?:tested|verified)\s*$)+/gm
 ];
 ```
+
+**Corpus anatomy** (SYNTHESIS "Bot-generated descriptions") — what these regexes target: appended AI-summary blocks share a uniform structure of HTML comment marker → `## Summary by <tool>` → category bullets (`**Bug Fixes**`, `**Documentation**`) → footer/badge, seen verbatim in f--prompts.chat, build-your-own-x, x1xhlol, langflow, rustdesk (CodeRabbit + Greptile confidence scores and mermaid), n8n (cubic), superpowers, firecrawl. Additional machine artifacts worth a pattern: copyberry `<!-- copyberry-projection-id -->` footers (openai/codex), trop `Backport of #N` bodies (electron), copybara `Automated Code Change` (tensorflow). Scope limit: strip only hallucinated blocks from LLM output — never strip real template boilerplate, which is exactly what P1.4/B1 protect.
 
 #### D2. Apply conservative stripping (PRESERVATION LOGIC)
 **Implementation**: Apply patterns in `parseDescriptionOnlyResponse` after existing logic
@@ -343,6 +440,8 @@ if (isLikelyTemplate(originalDescription)) {
 - Template case: zero boilerplate bytes lost
 - Anchors resolve and commit coverage maintained
 
+**Proportionality spot-check** (SYNTHESIS "small but perfect" runners-up): for tiny diffs, additionally compare output against public-apis#7112, airbnb/javascript#3229, mrdoob/three.js#34144, EbookFoundation/free-programming-books#13422 — treatment should land in the S bucket without dropping Commit Coverage. This directly exercises A1's scaling instruction.
+
 #### E4. Anti-pattern validation (REGRESSION PREVENTION)
 **Test against corpus anti-patterns**:
 - Empty descriptions (12 repos): ensure we don't generate empty output
@@ -378,6 +477,17 @@ if (isLikelyTemplate(originalDescription)) {
 | **Anchor spam** | Low | Medium | Contextual anchor usage based on diff size; corpus shows anchor links are a differentiating feature |
 | **Template misclassification** | Medium | Medium | Sophisticated detection logic; test against 30 template repos vs 54 freeform repos |
 
+### Corpus-Bias Risks (SYNTHESIS.md "Sample" caveats)
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| **Small-n overfit** | Medium | Medium | n=5 per repo; treat all counts as directional; a repo enters Phase C profiles only when its `patterns.md` confirms the appendix row |
+| **Recency skew** | Medium | Low | Samples are mostly 2026 merges with some 2015-2024 drive-bys; conventions drift — spot-check house style before shipping a profile |
+| **Top-starred skew** | Medium | Medium | ~20 repos are curated lists/docs whose one-line PRs anchor the S bucket; weight code repos higher when calibrating length expectations |
+| **Bot-stream skew** | Low | Medium | Huge repos' merged streams can be bot-dominated (generative-ai-for-beginners 5/5, flutter autoroller); exclude bot PRs from human-style calibration |
+| **Diff-size heuristic misfire** | Medium | Medium | Corpus shows no diff-size↔length correlation (next.js −5,139 lines in one paragraph; v2rayN's longest PR is +82/−2); A1's small-diff rule is a preference, and E3 validates depth survives on small-but-risky diffs |
+| **Language-barrel miss** | Low | Low | ~6 Chinese-title repos and one bilingual template (cc-switch); prompt wording stays language-neutral and mirrors commit-message language |
+
 ### Quality Gates (Corpus-Aligned)
 
 - **Automated**: All existing tests must pass, typecheck/lint clean
@@ -405,6 +515,8 @@ if (isLikelyTemplate(originalDescription)) {
 | **ohmyzsh** | AI disclosure requirement | Enforce disclosure in prompts |
 | **PowerToys** | Evidence tables | Support validation tables with build IDs/SHAs |
 | **nodejs** | Freeform prose | Maintain flexibility for non-template content |
+| **immich** | Mandatory LLM-usage disclosure section | Never strip the disclosure prompt from the template; leave the answer to the user |
+| **ripienaar** | Anti-AI honeypot checkbox ("LLMs tick this box") | Never check the honeypot; preserve template byte-for-byte |
 
 ## Timeline & Resource Estimates
 
