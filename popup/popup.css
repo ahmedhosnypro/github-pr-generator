@@ -291,6 +291,13 @@ html::-webkit-scrollbar-corner {
 body {
   width: 360px;
   min-height: 400px;
+  /* Chrome caps extension popups at 600px tall: flex layout lets the popup
+     grow to that cap on high-resolution displays while <main> scrolls
+     internally between the pinned header and footer. */
+  max-height: 600px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   font-family: var(--md-sys-typescale-body-large-font);
   font-size: var(--md-sys-typescale-body-large-size);
   font-weight: var(--md-sys-typescale-body-large-weight);
@@ -307,12 +314,10 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   padding: 16px 20px 12px;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   background-color: var(--md-sys-color-surface);
-  position: sticky;
-  top: 0;
-  z-index: 10;
 }
 
 .header-content {
@@ -414,6 +419,9 @@ header {
 }
 
 main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 16px 20px;
 }
 
@@ -753,6 +761,55 @@ main {
   fill: currentColor;
 }
 
+/* MUI-style toggle button group (single-select), laid out as a 2-column grid. */
+.md-toggle-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  /* Reset <fieldset> UA styles */
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.md-toggle-button {
+  padding: 8px 12px;
+  font-family: var(--md-sys-typescale-label-large-font);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-label-large-weight);
+  line-height: var(--md-sys-typescale-label-large-line-height);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-on-surface);
+  background-color: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-full);
+  cursor: pointer;
+  transition:
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+}
+
+.md-toggle-button:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+.md-toggle-button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.md-toggle-button[aria-pressed="true"] {
+  background-color: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: var(--md-sys-color-secondary-container);
+}
+
+.md-toggle-button[aria-pressed="true"]:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-secondary-container) 90%, black);
+}
+
 .status-indicator {
   display: inline-flex;
   align-items: center;
@@ -834,12 +891,10 @@ main {
 }
 
 footer {
+  flex-shrink: 0;
   padding: 12px 20px 16px;
   border-top: 1px solid var(--md-sys-color-outline-variant);
   background-color: var(--md-sys-color-surface);
-  position: sticky;
-  bottom: 0;
-  z-index: 10;
 }
 
 .footer-content {

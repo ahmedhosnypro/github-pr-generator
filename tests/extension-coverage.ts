@@ -1,7 +1,7 @@
 import type { FileChange, GhPrDetails } from "./shared";
 import { extractLinkedIssues, fetchPRCommits, fetchPRFiles } from "./shared";
 import type { CoverageResult, TestContext } from "./testkit";
-import { computeCoverageDetails, countCoveredCommits, logCommitCoverageVerdict, runTest } from "./testkit";
+import { computeCoverageDetails, countCoveredCommits, logCoverageVerdictBlock, runTest } from "./testkit";
 
 interface ExtensionStats {
   files: number;
@@ -89,19 +89,12 @@ function testExtensionCommitCoverage(ctx: TestContext): CoverageResult {
   console.log(`\nCommits represented in changes summary: ${String(coveredInSummary)}/${String(commits.length)}`);
 
   const prDescription = prDetails.body ?? "";
-  const { covered, details } = computeCoverageDetails(commits, prDescription);
-
-  console.log("\n=== PR Description Commit Coverage ===");
-  details.forEach((d) => {
-    const status = d.covered ? "✓ COVERED" : "✗ MISSING";
-    console.log(`  ${status}: ${d.headline}`);
-  });
-
-  const coverage = (covered / commits.length) * 100;
-  const coveragePercent = coverage.toFixed(1);
-  console.log("\n=== SUMMARY ===");
-  console.log(`Commits covered in PR description: ${String(covered)}/${String(commits.length)} (${coveragePercent}%)`);
-  logCommitCoverageVerdict(coverage, coveragePercent);
+  const { details } = computeCoverageDetails(commits, prDescription);
+  const { covered, coverage, coveragePercent } = logCoverageVerdictBlock(
+    "\n=== PR Description Commit Coverage ===",
+    "Commits covered in PR description",
+    details,
+  );
   return { passed: coverage >= 90, coverage: coveragePercent, covered, total: commits.length };
 }
 

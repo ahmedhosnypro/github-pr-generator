@@ -1,4 +1,5 @@
 import type { GenerateMergeDescriptionResponse, GenerateMergeTitleResponse, OpenedPRData } from "../../types";
+import { discoverRepoStyle } from "../github/discovery";
 import { callAPI } from "../llm";
 import { logMsg } from "../log";
 import { parseDescriptionOnlyResponse, parseTitleOnlyResponse } from "../parse";
@@ -6,7 +7,10 @@ import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../prompts/m
 import { buildChangesSummary } from "../summary";
 import { buildStats, gatherPRData, getValidatedConfig } from "./shared";
 
-export async function handleGenerateMergeTitle(data: OpenedPRData): Promise<GenerateMergeTitleResponse> {
+export async function handleGenerateMergeTitle(
+  data: OpenedPRData,
+  onChunk?: (delta: string) => void,
+): Promise<GenerateMergeTitleResponse> {
   logMsg(
     "handleGenerateMergeTitle - owner: " +
       (data.owner || "") +
@@ -19,6 +23,7 @@ export async function handleGenerateMergeTitle(data: OpenedPRData): Promise<Gene
   const config = await getValidatedConfig();
   const gathered = await gatherPRData("handleGenerateMergeTitle", config, data);
   const stats = buildStats(gathered.prDetails, gathered.fileChanges);
+  const style = await discoverRepoStyle(config, gathered.owner, gathered.repo);
 
   const changesSummary = buildChangesSummary(
     {
@@ -38,17 +43,21 @@ export async function handleGenerateMergeTitle(data: OpenedPRData): Promise<Gene
     changesSummary,
     data.existingTitle || gathered.prDetails.title || "",
     data.existingMergeTitle || "",
+    style,
   );
   logMsg("handleGenerateMergeTitle - built mergeTitlePrompt, length: " + String(mergeTitlePrompt.length));
 
-  const llmResult = await callAPI(config, mergeTitlePrompt);
+  const llmResult = await callAPI(config, mergeTitlePrompt, 0.3, onChunk);
   const newTitle = parseTitleOnlyResponse(llmResult);
   logMsg("handleGenerateMergeTitle - parsed title: " + newTitle);
 
   return { title: newTitle };
 }
 
-export async function handleGenerateMergeDescription(data: OpenedPRData): Promise<GenerateMergeDescriptionResponse> {
+export async function handleGenerateMergeDescription(
+  data: OpenedPRData,
+  onChunk?: (delta: string) => void,
+): Promise<GenerateMergeDescriptionResponse> {
   logMsg(
     "handleGenerateMergeDescription - owner: " +
       (data.owner || "") +
@@ -61,6 +70,7 @@ export async function handleGenerateMergeDescription(data: OpenedPRData): Promis
   const config = await getValidatedConfig();
   const gathered = await gatherPRData("handleGenerateMergeDescription", config, data);
   const stats = buildStats(gathered.prDetails, gathered.fileChanges);
+  const style = await discoverRepoStyle(config, gathered.owner, gathered.repo);
 
   const existingTitle = data.existingTitle || gathered.prDetails.title || "";
   const existingMergeTitle = data.existingMergeTitle || "";
@@ -87,10 +97,11 @@ export async function handleGenerateMergeDescription(data: OpenedPRData): Promis
     existingDescription,
     existingMergeTitle,
     existingMergeDesc,
+    style,
   );
   logMsg("handleGenerateMergeDescription - built mergeDescPrompt, length: " + String(mergeDescPrompt.length));
 
-  const llmResult = await callAPI(config, mergeDescPrompt);
+  const llmResult = await callAPI(config, mergeDescPrompt, 0.3, onChunk);
   const newDescription = parseDescriptionOnlyResponse(llmResult);
   logMsg("handleGenerateMergeDescription - parsed description length: " + String(newDescription.length));
 

@@ -44,14 +44,17 @@ async function processDiffResponse(config: ExtensionConfig, response: Response):
   const diffText = await response.text();
   logMsg("Fetched diff, raw length: " + String(diffText.length) + " bytes");
 
+  // Hunk line ranges are metadata — parse them from the FULL diff so anchors
+  // stay available for files beyond the truncation window. Only the diff text
+  // that goes into the prompt is truncated.
+  const hunkRanges = parseHunkLineRanges(diffText);
   const trimmed = truncateDiff(diffText, config.diffMaxLines, config.diffMaxBytes);
-  const hunkRanges = parseHunkLineRanges(trimmed);
   logMsg(
     "Trimmed diff length: " +
       String(trimmed.length) +
-      " bytes, " +
+      " bytes, anchors for " +
       String(Object.keys(hunkRanges).length) +
-      " files with hunks",
+      " files",
   );
   return { diff: trimmed, hunks: hunkRanges };
 }
@@ -99,13 +102,7 @@ export async function fetchGitHubDiff(
     logMsg("Diff fetching disabled by config");
     return null;
   }
-  if (
-    !branchContext ||
-    !branchContext.owner ||
-    !branchContext.repo ||
-    !branchContext.baseBranch ||
-    !branchContext.headBranch
-  ) {
+  if (!branchContext?.owner || !branchContext.repo || !branchContext.baseBranch || !branchContext.headBranch) {
     logMsg("Cannot fetch diff: missing branch context - " + JSON.stringify(branchContext));
     return null;
   }

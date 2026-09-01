@@ -5,7 +5,15 @@ import { errorMessage, errorStack } from "./errors";
 import { extractCommits, extractLinkedIssues, extractStats } from "./extract-commits";
 import { extractBranchContext, extractFileChanges } from "./extract-context";
 import { log } from "./log";
-import { sendToBackground } from "./messaging";
+import { splitStreamedCombined, streamFromBackground } from "./stream";
+
+/** Lightweight per-chunk fill during streaming; the final fillPRFields call re-commits with full React side effects. */
+function fillPRFieldsStreaming(title: string, description: string): void {
+  const titleInput = document.querySelector<HTMLInputElement>('input[name="pull_request[title]"]');
+  const bodyTextarea = document.querySelector<HTMLTextAreaElement>("textarea#pull_request_body");
+  if (titleInput && title) setReactValue(titleInput, title);
+  if (bodyTextarea && description) setReactValue(bodyTextarea, description);
+}
 
 function extractExistingBody(): string {
   const textarea = document.querySelector<HTMLTextAreaElement>("textarea#pull_request_body");
@@ -74,29 +82,30 @@ async function runGenerate(): Promise<void> {
     return;
   }
 
-  log("info", "Sending message to background script...");
-  const response = await sendToBackground<GenerateResponse>({
-    type: "generate",
-    data: {
-      commits: commits.map((c) => ({ message: c.message })),
-      fileChanges,
-      stats,
-      branchContext,
-      linkedIssues,
-      existingBody,
+  log("info", "Streaming generate request over background port...");
+  let accumulated = "";
+  const result = await streamFromBackground<GenerateResponse>(
+    {
+      type: "generate",
+      data: {
+        commits: commits.map((c) => ({ message: c.message })),
+        fileChanges,
+        stats,
+        branchContext,
+        linkedIssues,
+        existingBody,
+      },
     },
-  });
-  log("info", "Response from background: " + JSON.stringify(response));
+    (delta) => {
+      accumulated += delta;
+      const partial = splitStreamedCombined(accumulated);
+      fillPRFieldsStreaming(partial.title, partial.description);
+    },
+  );
+  log("info", "Stream completed");
 
-  if ("error" in response) {
-    log("error", "Error from background: " + response.error);
-    log("error", "Full response object: " + response.error);
-    showToast("Error: " + response.error, true);
-    return;
-  }
-
-  fillPRFields(response.title, response.description);
-  log("info", "PR fields filled successfully - title: " + response.title);
+  fillPRFields(result.title, result.description);
+  log("info", "PR fields filled successfully - title: " + result.title);
   showToast("PR title and description generated!");
 }
 

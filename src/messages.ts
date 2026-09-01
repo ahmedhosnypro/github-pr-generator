@@ -44,6 +44,14 @@ interface GetStoredConfigMessage {
   data?: null;
 }
 
+export const STREAM_PORT_NAME = "pr-generator-stream";
+
+/** Request sent by the content script over the streaming port. */
+export interface StreamRequest {
+  type: "generate" | "generateMergeTitle" | "generateMergeDescription";
+  data?: GenerateData | OpenedPRData;
+}
+
 export type ExtensionMessage =
   | KeepalivePingMessage
   | GenerateMessage

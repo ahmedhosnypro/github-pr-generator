@@ -82,6 +82,22 @@ export interface GitHubFileApiItem {
   deletions?: number;
 }
 
+/** Entry from the GitHub contents API (directory listing). */
+export interface GitHubContentsEntry {
+  name?: string;
+  path?: string;
+  type?: string;
+  download_url?: string | null;
+}
+
+/** Subset of the GitHub list-PRs response used for repo style discovery. */
+export interface GitHubPRListItem {
+  title?: string;
+  body?: string | null;
+  merged_at?: string | null;
+  user?: { login?: string } | null;
+}
+
 /** OpenAI-compatible chat completion response/chunk shapes. */
 interface ChatCompletionContent {
   content?: string;

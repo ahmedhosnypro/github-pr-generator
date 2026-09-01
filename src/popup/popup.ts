@@ -12,6 +12,7 @@ import {
   testApiBtn,
   testGitHubBtn,
   themeToggle,
+  thinkingEffortGroup,
   toggleApiKeyBtn,
   toggleGithubTokenBtn,
   validateEndpointBtn,
@@ -21,7 +22,12 @@ import { persistField, saveSettings } from "./save";
 import { testApi } from "./test-api";
 import { testGitHub } from "./test-github";
 import { initTheme, toggleTheme, watchSystemTheme } from "./theme";
-import { togglePasswordVisibility, updateDiffConditionalVisibility } from "./ui";
+import {
+  selectThinkingEffort,
+  togglePasswordVisibility,
+  toThinkingEffort,
+  updateDiffConditionalVisibility,
+} from "./ui";
 import { resetEndpointFieldError, validateEndpoint, validateEndpointDebounced } from "./validate";
 
 function wireAutosaveField(key: keyof SaveConfigData, el: HTMLInputElement): void {
@@ -54,6 +60,16 @@ function wireDiffSettingsToggle(): void {
   });
 }
 
+function wireThinkingEffortGroup(): void {
+  for (const button of thinkingEffortGroup.querySelectorAll<HTMLButtonElement>("[data-effort]")) {
+    button.addEventListener("click", () => {
+      const effort = toThinkingEffort(button.dataset.effort);
+      selectThinkingEffort(effort);
+      persistField("thinkingEffort", effort);
+    });
+  }
+}
+
 function wireButtons(): void {
   saveBtn.addEventListener("click", saveSettings);
   validateEndpointBtn.addEventListener("click", validateEndpoint);
@@ -73,6 +89,7 @@ function wireButtons(): void {
 }
 
 wireAutosave();
+wireThinkingEffortGroup();
 wireButtons();
 watchSystemTheme();
 

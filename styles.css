@@ -146,9 +146,9 @@
 }
 
 .ai-log-close {
-  font-size: 16px !important;
+  font-size: 16px;
   line-height: 1;
-  padding: 0 6px !important;
+  padding: 0 6px;
 }
 
 .ai-log-body {
@@ -173,15 +173,15 @@
 }
 
 .ai-log-error {
-  color: #ff7b72 !important;
+  color: #ff7b72;
 }
 
 .ai-log-warn {
-  color: #d29922 !important;
+  color: #d29922;
 }
 
 .ai-log-info {
-  color: #58a6ff !important;
+  color: #58a6ff;
 }
 
 .ai-generate-btn--opened-title {
@@ -189,8 +189,68 @@
   padding: 2px 8px;
   font-size: 11px;
   line-height: 18px;
-  border-radius: 4px;
+  border-radius: 4px 0 0 4px;
   vertical-align: middle;
+}
+
+.ai-generate-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+}
+
+.ai-generate-caret {
+  margin-left: -1px;
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 0 4px 4px 0;
+  vertical-align: middle;
+}
+
+.ai-generate-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 99;
+  min-width: 250px;
+  padding: 4px;
+  background-color: #ffffff;
+  border: 1px solid #d1d9e0;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
+}
+
+.ai-generate-menu__item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+.ai-generate-menu__item:hover {
+  background-color: #f6f8fa;
+}
+
+.ai-generate-menu__label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #1f2328;
+}
+
+.ai-generate-menu__hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #59636e;
 }
 
 .ai-generate-btn--opened-desc {

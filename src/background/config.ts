@@ -1,4 +1,10 @@
-import type { ExtensionConfig, FileConfig, StoredConfig } from "../types";
+import {
+  type ExtensionConfig,
+  type FileConfig,
+  type StoredConfig,
+  THINKING_EFFORTS,
+  type ThinkingEffort,
+} from "../types";
 import { errorMessage, logMsg } from "./log";
 
 export const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
@@ -6,6 +12,7 @@ export const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
   "apiKey",
   "model",
   "githubToken",
+  "thinkingEffort",
   "diffEnabled",
   "diffMaxLines",
   "diffMaxBytes",
@@ -43,6 +50,11 @@ function resolveDiffEnabled(stored: StoredConfig): boolean {
   return true;
 }
 
+function resolveThinkingEffort(stored: StoredConfig): ThinkingEffort {
+  const raw = FILE_CONFIG?.thinkingEffort ?? stored.thinkingEffort;
+  return THINKING_EFFORTS.find((effort) => effort === raw) ?? "default";
+}
+
 function resolveNumberLimit(
   fileValue: number | undefined,
   storedValue: number | string | undefined,
@@ -55,10 +67,11 @@ function resolveNumberLimit(
 
 function mergeConfig(stored: StoredConfig): ExtensionConfig {
   const config: ExtensionConfig = {
-    apiEndpoint: stored.apiEndpoint || (FILE_CONFIG && FILE_CONFIG.apiEndpoint) || "",
-    apiKey: stored.apiKey || (FILE_CONFIG && FILE_CONFIG.apiKey) || "",
-    model: stored.model || (FILE_CONFIG && FILE_CONFIG.model) || "",
-    githubToken: stored.githubToken || (FILE_CONFIG && FILE_CONFIG.githubToken) || "",
+    apiEndpoint: stored.apiEndpoint || FILE_CONFIG?.apiEndpoint || "",
+    apiKey: stored.apiKey || FILE_CONFIG?.apiKey || "",
+    model: stored.model || FILE_CONFIG?.model || "",
+    githubToken: stored.githubToken || FILE_CONFIG?.githubToken || "",
+    thinkingEffort: resolveThinkingEffort(stored),
     diffEnabled: resolveDiffEnabled(stored),
     diffMaxLines: resolveNumberLimit(FILE_CONFIG ? FILE_CONFIG.diffMaxLines : undefined, stored.diffMaxLines, 3000),
     diffMaxBytes: resolveNumberLimit(FILE_CONFIG ? FILE_CONFIG.diffMaxBytes : undefined, stored.diffMaxBytes, 100000),
@@ -78,6 +91,8 @@ function mergeConfig(stored: StoredConfig): ExtensionConfig {
       config.apiEndpoint +
       ", model=" +
       config.model +
+      ", thinkingEffort=" +
+      config.thinkingEffort +
       ", hasKey=" +
       String(!!config.apiKey) +
       ", hasGithubToken=" +

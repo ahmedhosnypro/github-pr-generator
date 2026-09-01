@@ -1,7 +1,11 @@
+import { buildHouseStyleNote, type RepoStyle } from "../repo-style";
+import { TITLE_STYLE_GUIDANCE } from "./common";
+
 export function buildMergeTitlePrompt(
   changesSummary: string,
   existingTitle: string,
   existingMergeTitle: string,
+  style?: RepoStyle,
 ): string {
   let prompt = "Generate ONLY a GitHub merge commit title for the following pull request changes.\n\n";
   prompt +=
@@ -21,11 +25,14 @@ export function buildMergeTitlePrompt(
       '"\nGenerate an improved version.\n\n';
   }
 
+  if (style) {
+    prompt += buildHouseStyleNote(style);
+  }
+
   prompt += "OUTPUT FORMAT:\n";
   prompt +=
     'Output ONLY the merge commit title on a single line. No quotes, no markdown, no prefix like "Title:", no description.\n';
-  prompt +=
-    'Use conventional commit format (e.g. "feat: add JWT auth", "fix: resolve token expiry", "refactor: extract validation logic"). Under 72 characters.\n\n';
+  prompt += TITLE_STYLE_GUIDANCE + ". Under 72 characters.\n\n";
   prompt += "RULES:\n";
   prompt += "- Be specific — reference actual code entities from the diff, not generic descriptions\n";
   prompt += "- The merge commit title should summarize the overall change concisely\n";
@@ -42,6 +49,7 @@ export function buildMergeDescriptionPrompt(
   existingDescription: string,
   existingMergeTitle: string,
   existingMergeDesc: string,
+  style?: RepoStyle,
 ): string {
   let prompt = "Generate ONLY a GitHub merge commit extended description for the following pull request changes.\n\n";
   prompt +=
@@ -65,6 +73,10 @@ export function buildMergeDescriptionPrompt(
       "## Existing Merge Commit Description\nThe current merge commit description is:\n\n" +
       existingMergeDesc +
       "\nGenerate an improved version.\n\n";
+  }
+
+  if (style) {
+    prompt += buildHouseStyleNote(style);
   }
 
   prompt += buildMergeDescriptionRules();

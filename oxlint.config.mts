@@ -22,5 +22,6 @@ export default defineConfig({
     "@typescript-eslint/no-explicit-any": "error",
     "no-unused-vars": ["error", unusedVarOptions],
     "@typescript-eslint/no-unused-vars": ["error", unusedVarOptions],
+    "no-await-in-loop": "off",
   },
 });

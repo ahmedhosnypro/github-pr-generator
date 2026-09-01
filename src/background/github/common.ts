@@ -1,6 +1,7 @@
 import type { ExtensionConfig } from "../../types";
 
 export const GITHUB_JSON_ACCEPT = "application/vnd.github.v3+json";
+export const GITHUB_RAW_ACCEPT = "application/vnd.github.raw+json";
 export const GITHUB_DIFF_ACCEPT = "application/vnd.github.v3.diff";
 export const GITHUB_USER_AGENT = "github-pr-generator-extension";
 const RATE_LIMIT_REMAINING_HEADER = "X-RateLimit-Remaining";

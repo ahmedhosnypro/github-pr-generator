@@ -5,6 +5,7 @@ import { handleGenerate } from "./background/handlers/generate";
 import { handleGenerateMergeDescription, handleGenerateMergeTitle } from "./background/handlers/merge";
 import { handleGenerateTitle } from "./background/handlers/title";
 import { errorMessage, logMsg } from "./background/log";
+import { registerStreamListener } from "./background/stream";
 import type { ExtensionMessage, GetConfigResponse, GetStoredConfigResponse, MessageErrorResponse } from "./types";
 
 function relayAsync<T extends object>(
@@ -113,3 +114,5 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       return relayOpenedPR(message, sendResponse);
   }
 });
+
+registerStreamListener();

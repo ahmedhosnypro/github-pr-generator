@@ -71,6 +71,20 @@
             <input type="text" id="model" class="md-text-field__input monospace" placeholder="e.g., gpt-4, llama-3.1-70b" autocomplete="off" aria-describedby="modelHint">
             <span class="field-hint" id="modelHint">Model identifier for the API</span>
           </div>
+
+          <div class="field">
+            <span class="field-label" id="thinkingEffortLabel">Thinking Effort</span>
+            <fieldset class="md-toggle-group" id="thinkingEffortGroup" aria-labelledby="thinkingEffortLabel">
+              <button type="button" class="md-toggle-button" data-effort="none" aria-pressed="false">None</button>
+              <button type="button" class="md-toggle-button" data-effort="default" aria-pressed="true">Default</button>
+              <button type="button" class="md-toggle-button" data-effort="minimal" aria-pressed="false">Minimal</button>
+              <button type="button" class="md-toggle-button" data-effort="low" aria-pressed="false">Low</button>
+              <button type="button" class="md-toggle-button" data-effort="medium" aria-pressed="false">Medium</button>
+              <button type="button" class="md-toggle-button" data-effort="high" aria-pressed="false">High</button>
+              <button type="button" class="md-toggle-button" data-effort="max" aria-pressed="false">Max</button>
+            </fieldset>
+            <span class="field-hint" id="thinkingEffortHint">Sent as <code>reasoning_effort</code> to the API; "Default" omits it</span>
+          </div>
         </div>
       </div>
     </section>

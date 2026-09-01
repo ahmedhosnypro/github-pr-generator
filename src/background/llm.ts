@@ -2,8 +2,14 @@ import type { ChatCompletionResponse } from "../github-types";
 import type { ExtensionConfig } from "../types";
 import { errorMessage, logMsg } from "./log";
 import { SYSTEM_PROMPT } from "./prompts/common";
+import { createSSEParser } from "./sse";
 
-async function postChatCompletion(url: string, config: ExtensionConfig, prompt: string): Promise<Response> {
+async function postChatCompletion(
+  url: string,
+  config: ExtensionConfig,
+  prompt: string,
+  temperature: number,
+): Promise<Response> {
   try {
     return await fetch(url, {
       method: "POST",
@@ -11,14 +17,18 @@ async function postChatCompletion(url: string, config: ExtensionConfig, prompt: 
         "Content-Type": "application/json",
         Authorization: "Bearer " + config.apiKey,
       },
+      // Always ask for a stream: servers that ignore it answer with plain JSON,
+      // which the fallback path in callAPI handles as before.
       body: JSON.stringify({
         model: config.model,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: prompt },
         ],
-        temperature: 0.3,
-        stream: false,
+        temperature,
+        stream: true,
+        // "default" omits the field so the provider applies its own effort default.
+        ...(config.thinkingEffort === "default" ? {} : { reasoning_effort: config.thinkingEffort }),
       }),
     });
   } catch (fetchErr) {
@@ -41,57 +51,54 @@ async function assertOkResponse(response: Response): Promise<void> {
   }
 }
 
-// Some OpenAI-compatible servers (e.g. NVIDIA NIM) default to streaming
-// (text/event-stream) even when the client doesn't ask for it, returning
-// `data: {...}` SSE chunks instead of a single JSON object. Detect that and
-// aggregate the deltas into one completion so the rest of the code can keep
-// treating the response as a regular chat completion.
-interface SSEAccumulator {
-  aggregated: string;
-  lastFull: string;
-}
-
-function applySSEPayload(acc: SSEAccumulator, payload: string): void {
-  try {
-    const chunk = JSON.parse(payload) as ChatCompletionResponse;
-    const choice = chunk.choices?.[0];
-    const delta = (choice?.delta && choice.delta.content) || (choice?.message && choice.message.content) || "";
-    if (!delta) return;
-    if (choice?.delta && choice.delta.content !== undefined) {
-      acc.aggregated += delta;
-    } else if (choice?.message?.content) {
-      acc.lastFull = choice.message.content;
+/** Incrementally read a text/event-stream response, forwarding each content delta to onChunk. */
+async function readStreamedCompletion(
+  response: Response,
+  onChunk: ((delta: string) => void) | undefined,
+): Promise<string> {
+  const parser = createSSEParser();
+  const decoder = new TextDecoder();
+  let aggregated = "";
+  const deliver = (deltas: string[]): void => {
+    for (const delta of deltas) {
+      aggregated += delta;
+      onChunk?.(delta);
     }
-  } catch (e) {
-    logMsg("SSE: skipping non-JSON chunk: " + errorMessage(e));
-  }
-}
+  };
 
-function aggregateSSEChunks(responseText: string): SSEAccumulator {
-  const acc: SSEAccumulator = { aggregated: "", lastFull: "" };
-  for (const rawLine of responseText.split("\n")) {
-    const line = rawLine.replace(/\r$/, "").trim();
-    if (!line.startsWith("data:")) continue;
-    const payload = line.replace(/^data:\s*/, "");
-    if (payload !== "[DONE]" && payload !== "") applySSEPayload(acc, payload);
-  }
-  return acc;
-}
-
-function parseApiResponse(
-  responseText: string,
-  contentType: string,
-): { json: ChatCompletionResponse; fromStream: boolean } {
-  const looksLikeSSE = contentType.includes("event-stream") || /^data:\s/m.test(responseText);
-
-  if (looksLikeSSE) {
-    logMsg("Detected SSE stream response; aggregating chunks");
-    const acc = aggregateSSEChunks(responseText);
-    const finalContent = acc.aggregated || acc.lastFull || "";
-    if (!finalContent) {
-      logMsg("SSE: no content aggregated. Response (first 300): " + responseText.substring(0, 300));
+  const body = response.body;
+  if (body) {
+    const reader = body.getReader();
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop -- a stream reader is sequential by nature: chunks must be read in order
+      const { done, value } = await reader.read();
+      if (done) break;
+      deliver(parser.push(decoder.decode(value, { stream: true })));
     }
-    return { json: { choices: [{ message: { content: finalContent } }] }, fromStream: true };
+    deliver(parser.push(decoder.decode()));
+  }
+  deliver(parser.flush());
+
+  if (!aggregated && parser.getSnapshot()) {
+    // Server answered SSE but with full message content instead of deltas (e.g. NVIDIA NIM).
+    aggregated = parser.getSnapshot();
+    onChunk?.(aggregated);
+  }
+  if (!aggregated) {
+    logMsg("SSE: no content aggregated from stream");
+  }
+  return aggregated;
+}
+
+/** Fallback for servers that ignored stream:true and sent a plain (or unlabeled SSE) body. */
+function parseJsonResponseBody(responseText: string): ChatCompletionResponse {
+  // Tolerate an SSE body that arrived without the event-stream content type:
+  // aggregate it with the same parser used by the streaming path.
+  if (/^data:\s/m.test(responseText)) {
+    logMsg("Response body is SSE despite content-type; aggregating chunks");
+    const parser = createSSEParser();
+    const aggregated = parser.push(responseText + "\n").join("") || parser.getSnapshot();
+    return { choices: [{ message: { content: aggregated } }] };
   }
 
   const cleanResponseText = responseText.replace(/data:\s*\[DONE\].*$/s, "").trim();
@@ -100,7 +107,7 @@ function parseApiResponse(
   }
 
   try {
-    return { json: JSON.parse(cleanResponseText) as ChatCompletionResponse, fromStream: false };
+    return JSON.parse(cleanResponseText) as ChatCompletionResponse;
   } catch (parseErr) {
     logMsg("JSON.parse failed: " + errorMessage(parseErr));
     logMsg("Response text (first 300): " + responseText.substring(0, 300));
@@ -108,24 +115,45 @@ function parseApiResponse(
   }
 }
 
-export async function callAPI(config: ExtensionConfig, prompt: string): Promise<string> {
+export async function callAPI(
+  config: ExtensionConfig,
+  prompt: string,
+  temperature = 0.3,
+  onChunk?: (delta: string) => void,
+): Promise<string> {
   const url = config.apiEndpoint + "/chat/completions";
-  logMsg("Calling API: " + url + ", model: " + config.model);
+  logMsg(
+    "Calling API: " +
+      url +
+      ", model: " +
+      config.model +
+      ", temperature: " +
+      String(temperature) +
+      ", reasoning_effort: " +
+      config.thinkingEffort,
+  );
 
-  const response = await postChatCompletion(url, config, prompt);
+  const response = await postChatCompletion(url, config, prompt, temperature);
   await assertOkResponse(response);
 
-  const responseText = await response.text();
   const contentType = response.headers.get("content-type") || "";
-  const { json, fromStream } = parseApiResponse(responseText, contentType);
-
-  const content = json.choices?.[0]?.message?.content;
+  let content: string;
+  let fromStream: boolean;
+  if (contentType.includes("event-stream")) {
+    content = await readStreamedCompletion(response, onChunk);
+    fromStream = true;
+  } else {
+    const json = parseJsonResponseBody(await response.text());
+    content = json.choices?.[0]?.message?.content || "";
+    fromStream = false;
+  }
 
   if (!content) {
-    logMsg("No content in API response. Keys: " + Object.keys(json).join(", "));
+    logMsg("No content in API response");
     throw new Error("No content in API response");
   }
 
+  if (!fromStream) onChunk?.(content); // non-streaming endpoint: surface the whole answer as one chunk
   logMsg("API content length: " + String(content.length) + (fromStream ? " (from stream)" : ""));
   return content.trim();
 }

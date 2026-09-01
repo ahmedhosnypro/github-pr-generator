@@ -24,9 +24,9 @@ function mapPRDetails(prData: GitHubPRApiResponse): GitHubPRDetails {
     "Fetched PR details - title: " +
       String(prData.title) +
       ", base: " +
-      String(prData.base && prData.base.ref) +
+      String(prData.base?.ref) +
       ", head: " +
-      String(prData.head && prData.head.ref) +
+      String(prData.head?.ref) +
       ", additions: " +
       String(prData.additions || 0) +
       ", deletions: " +
@@ -37,8 +37,8 @@ function mapPRDetails(prData: GitHubPRApiResponse): GitHubPRDetails {
   return {
     title: prData.title || "",
     body: prData.body || "",
-    baseBranch: prData.base && prData.base.ref ? prData.base.ref : "",
-    headBranch: prData.head && prData.head.ref ? prData.head.ref : "",
+    baseBranch: prData.base?.ref ? prData.base.ref : "",
+    headBranch: prData.head?.ref ? prData.head.ref : "",
     additions: prData.additions || 0,
     deletions: prData.deletions || 0,
     changedFiles: prData.changed_files || 0,

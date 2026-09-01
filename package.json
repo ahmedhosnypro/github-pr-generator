@@ -1,6 +1,6 @@
 {
   "name": "github-pr-generator",
-  "version": "1.6.1",
+  "version": "1.7.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -22,8 +22,15 @@
     "test:coverage": "bun run tests/commit-coverage.ts",
     "test:extension": "bun run tests/extension-coverage.ts",
     "test:full": "bun run tests/full-coverage.ts",
+    "test:logic": "bun run tests/prompt-logic.ts",
+    "test:parse": "bun run tests/parse.ts",
+    "test:format": "bun run tests/prompt-format.ts",
+    "test:format-live": "bun run tests/format-live.ts",
+    "lab": "bun run tests/pr-lab.ts",
+    "test:stream": "bun run tests/stream-parse.ts",
     "test:pr-creation": "bun run tests/pr-creation-prompt.ts",
-    "test": "bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation"
+    "test:style": "bun run tests/repo-style.ts",
+    "test": "bun run test:logic && bun run test:parse && bun run test:format && bun run test:stream && bun run test:style && bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",

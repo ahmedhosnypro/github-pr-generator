@@ -99,7 +99,7 @@ async function fetchAllPages<TMapped>(
 
 function mapCommitItem(raw: unknown): CommitInfo {
   const c = raw as GitHubCommitApiItem;
-  return { message: c.commit && c.commit.message ? c.commit.message : "" };
+  return { message: c.commit?.message ? c.commit.message : "" };
 }
 
 export async function fetchPRCommits(

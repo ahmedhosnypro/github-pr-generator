@@ -1,16 +1,22 @@
 import type { GenerateMergeDescriptionResponse, GenerateMergeTitleResponse } from "../responses";
 import { BTN_MERGE_DESC_ID, BTN_MERGE_TITLE_ID } from "./constants";
-import { clearButtonLoading, getButton, setButtonLoading, showToast } from "./dom";
+import { clearButtonLoading, getButton, setButtonLoading, setReactValue, showToast } from "./dom";
 import { errorMessage, errorStack } from "./errors";
 import { extractBranchContext } from "./extract-context";
 import { log } from "./log";
-import { extractExistingMergeDescription, extractExistingMergeTitle, fillMergeFields } from "./merge-fields";
-import { sendToBackground } from "./messaging";
+import {
+  extractExistingMergeDescription,
+  extractExistingMergeTitle,
+  fillMergeFields,
+  findMergeDescTextarea,
+  findMergeTitleInput,
+} from "./merge-fields";
 import {
   extractExistingOpenedDescription,
   extractExistingOpenedTitle,
   extractOwnerRepoPRNumber,
 } from "./opened-scrape";
+import { streamFromBackground } from "./stream";
 
 export async function handleGenerateMergeTitle(): Promise<void> {
   const btn = getButton(BTN_MERGE_TITLE_ID);
@@ -44,23 +50,26 @@ async function generateMergeTitle(): Promise<void> {
     return;
   }
   log("info", "handleGenerateMergeTitle - " + JSON.stringify(ctx));
-  const response = await sendToBackground<GenerateMergeTitleResponse>({
-    type: "generateMergeTitle",
-    data: {
-      owner: ctx.owner,
-      repo: ctx.repo,
-      prNumber: ctx.prNumber,
-      existingTitle,
-      existingMergeTitle,
-      existingDescription,
-      branchContext,
+  let accumulated = "";
+  const response = await streamFromBackground<GenerateMergeTitleResponse>(
+    {
+      type: "generateMergeTitle",
+      data: {
+        owner: ctx.owner,
+        repo: ctx.repo,
+        prNumber: ctx.prNumber,
+        existingTitle,
+        existingMergeTitle,
+        existingDescription,
+        branchContext,
+      },
     },
-  });
-  if ("error" in response) {
-    log("error", "Error from background (generateMergeTitle): " + response.error);
-    showToast("Error: " + response.error, true);
-    return;
-  }
+    (delta) => {
+      accumulated += delta;
+      const input = findMergeTitleInput();
+      if (input) setReactValue(input, accumulated);
+    },
+  );
   fillMergeFields(response.title, "");
   showToast("Merge commit title generated!");
 }
@@ -98,24 +107,27 @@ async function generateMergeDescription(): Promise<void> {
     return;
   }
   log("info", "handleGenerateMergeDescription - " + JSON.stringify(ctx));
-  const response = await sendToBackground<GenerateMergeDescriptionResponse>({
-    type: "generateMergeDescription",
-    data: {
-      owner: ctx.owner,
-      repo: ctx.repo,
-      prNumber: ctx.prNumber,
-      existingTitle,
-      existingMergeTitle,
-      existingDescription,
-      existingMergeDescription: existingMergeDesc,
-      branchContext,
+  let accumulated = "";
+  const response = await streamFromBackground<GenerateMergeDescriptionResponse>(
+    {
+      type: "generateMergeDescription",
+      data: {
+        owner: ctx.owner,
+        repo: ctx.repo,
+        prNumber: ctx.prNumber,
+        existingTitle,
+        existingMergeTitle,
+        existingDescription,
+        existingMergeDescription: existingMergeDesc,
+        branchContext,
+      },
     },
-  });
-  if ("error" in response) {
-    log("error", "Error from background (generateMergeDescription): " + response.error);
-    showToast("Error: " + response.error, true);
-    return;
-  }
+    (delta) => {
+      accumulated += delta;
+      const textarea = findMergeDescTextarea();
+      if (textarea) setReactValue(textarea, accumulated);
+    },
+  );
   fillMergeFields("", response.description);
   showToast("Merge commit description generated!");
 }

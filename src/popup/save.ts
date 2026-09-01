@@ -10,7 +10,7 @@ import {
 } from "./elements";
 import { sendToBackground, storageSetFallback } from "./messaging";
 import { isLoaded } from "./state";
-import { showToast, updateLastSaved } from "./ui";
+import { getSelectedThinkingEffort, showToast, updateLastSaved } from "./ui";
 
 export function persistField(key: keyof SaveConfigData, value: string | boolean): void {
   if (!isLoaded()) return;
@@ -33,6 +33,7 @@ export function saveSettings(): void {
     apiKey: apiKeyInput.value.trim(),
     model: modelInput.value.trim(),
     githubToken: githubTokenInput.value.trim(),
+    thinkingEffort: getSelectedThinkingEffort(),
     diffEnabled: diffEnabledInput.checked,
     diffMaxLines: Number.parseInt(diffMaxLinesInput.value, 10) || 3000,
     diffMaxBytes: Number.parseInt(diffMaxBytesInput.value, 10) || 100000,

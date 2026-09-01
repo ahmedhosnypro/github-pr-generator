@@ -11,6 +11,7 @@ function buildStorageUpdate(data: SaveConfigData): StoredConfig {
   if (data.apiKey !== undefined) update.apiKey = (data.apiKey || "").trim();
   if (data.model !== undefined) update.model = (data.model || "").trim();
   if (data.githubToken !== undefined) update.githubToken = (data.githubToken || "").trim();
+  if (data.thinkingEffort !== undefined) update.thinkingEffort = (data.thinkingEffort || "").trim();
   if (data.diffEnabled !== undefined) update.diffEnabled = data.diffEnabled;
   if (data.diffMaxLines !== undefined) update.diffMaxLines = Number.parseInt(String(data.diffMaxLines), 10);
   if (data.diffMaxBytes !== undefined) update.diffMaxBytes = Number.parseInt(String(data.diffMaxBytes), 10);

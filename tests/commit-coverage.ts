@@ -1,6 +1,6 @@
 import { fetchPRCommits } from "./shared";
 import type { CoverageResult, TestContext } from "./testkit";
-import { computeCoverageDetails, logCommitCoverageVerdict, runTest } from "./testkit";
+import { computeCoverageDetails, logCoverageVerdictBlock, runTest } from "./testkit";
 
 function logCommitList(commits: string[]): void {
   console.log(`Total commits in PR: ${String(commits.length)}`);
@@ -15,19 +15,12 @@ function analyzeDescription(commits: string[], prDescription: string): CoverageR
   console.log("\n=== PR Description Analysis ===");
   console.log(`Description length: ${String(prDescription.length)} chars`);
 
-  const { covered, details } = computeCoverageDetails(commits, prDescription);
-
-  console.log("\n=== Coverage Results ===");
-  details.forEach((d) => {
-    const status = d.covered ? "✓ COVERED" : "✗ MISSING";
-    console.log(`  ${status}: ${d.headline}`);
-  });
-
-  const coverage = (covered / commits.length) * 100;
-  const coveragePercent = coverage.toFixed(1);
-  console.log("\n=== SUMMARY ===");
-  console.log(`Commits covered: ${String(covered)}/${String(commits.length)} (${coveragePercent}%)`);
-  logCommitCoverageVerdict(coverage, coveragePercent);
+  const { details } = computeCoverageDetails(commits, prDescription);
+  const { coverage, coveragePercent } = logCoverageVerdictBlock(
+    "\n=== Coverage Results ===",
+    "Commits covered",
+    details,
+  );
   return { passed: coverage >= 90, coverage: coveragePercent };
 }
 

@@ -10,10 +10,19 @@ import {
 } from "./elements";
 import { type BackgroundError, sendToBackground } from "./messaging";
 import { markLoaded } from "./state";
-import { updateDiffConditionalVisibility } from "./ui";
+import { selectThinkingEffort, toThinkingEffort, updateDiffConditionalVisibility } from "./ui";
 import { validateEndpointDebounced } from "./validate";
 
-const STORAGE_KEYS = ["apiEndpoint", "apiKey", "model", "githubToken", "diffEnabled", "diffMaxLines", "diffMaxBytes"];
+const STORAGE_KEYS = [
+  "apiEndpoint",
+  "apiKey",
+  "model",
+  "githubToken",
+  "thinkingEffort",
+  "diffEnabled",
+  "diffMaxLines",
+  "diffMaxBytes",
+];
 
 /** Popup-side merge of the service-worker copy, direct storage, and config.local.json. */
 interface ResolvedSettings {
@@ -21,6 +30,7 @@ interface ResolvedSettings {
   apiKey?: string;
   model?: string;
   githubToken?: string;
+  thinkingEffort?: string;
   diffEnabled?: boolean | string;
   diffMaxLines?: string | number;
   diffMaxBytes?: string | number;
@@ -62,6 +72,7 @@ function mergeStored(sw: StoredConfig, direct: StoredConfig): ResolvedSettings {
     apiKey: sw.apiKey || direct.apiKey || "",
     model: sw.model || direct.model || "",
     githubToken: sw.githubToken || direct.githubToken || "",
+    thinkingEffort: sw.thinkingEffort || direct.thinkingEffort || "default",
     diffEnabled: pickDiffEnabled(sw, direct),
     diffMaxLines: sw.diffMaxLines || direct.diffMaxLines || 3000,
     diffMaxBytes: sw.diffMaxBytes || direct.diffMaxBytes || 100000,
@@ -80,6 +91,7 @@ function applyValues(stored: ResolvedSettings, fileConfig: FileConfig | null): v
   apiKeyInput.value = stored.apiKey || fileConfig?.apiKey || "";
   modelInput.value = stored.model || fileConfig?.model || "";
   githubTokenInput.value = stored.githubToken || fileConfig?.githubToken || "";
+  selectThinkingEffort(toThinkingEffort(stored.thinkingEffort || fileConfig?.thinkingEffort || "default"));
   // Boolean() mirrors the original implicit coercion (older saves may hold "true"/"false" strings)
   diffEnabledInput.checked = Boolean(resolveDiffEnabled(stored, fileConfig));
   diffMaxLinesInput.value = String(stored.diffMaxLines || fileConfig?.diffMaxLines || 3000);

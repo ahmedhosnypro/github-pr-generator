@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!dist", "!icons"]
+    "includes": ["**", "!dist", "!icons", "!.agents"]
   },
   "formatter": {
     "enabled": true,

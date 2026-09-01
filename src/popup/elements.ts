@@ -8,6 +8,7 @@ function byId(id: string): HTMLElement {
 export const endpointInput = byId("apiEndpoint") as HTMLInputElement;
 export const apiKeyInput = byId("apiKey") as HTMLInputElement;
 export const modelInput = byId("model") as HTMLInputElement;
+export const thinkingEffortGroup = byId("thinkingEffortGroup");
 export const githubTokenInput = byId("githubToken") as HTMLInputElement;
 export const diffEnabledInput = byId("diffEnabled") as HTMLInputElement;
 export const diffMaxLinesInput = byId("diffMaxLines") as HTMLInputElement;

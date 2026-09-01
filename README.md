@@ -18,7 +18,7 @@ A Chrome extension that generates pull request titles and descriptions using any
 
 ### Opened PR Page (`/owner/repo/pull/N`)
 
-- **AI Title** button — generates and updates only the PR title via the GitHub API
+- **AI Title** button — generates and updates only the PR title via the GitHub API. The dropdown next to it offers two modes: *Improve current title* (refines the existing title, the default click action) and *Generate fresh title* (crafts a brand-new title from the PR's commits, files, and diff only — the current title is never included in the prompt)
 - **AI Description** button — generates and updates only the PR description via the GitHub API
 - Title and description are updated independently
 - Changes are pushed to GitHub via `PATCH /repos/{owner}/{repo}/pulls/{number}` and the page auto-refreshes through GitHub's real-time channel
@@ -26,10 +26,24 @@ A Chrome extension that generates pull request titles and descriptions using any
 ### General
 
 - Works with any OpenAI-compatible API endpoint
+- Streams the model's response and fills the PR title/description live as tokens arrive (with a non-streaming fallback for endpoints that ignore `stream: true`)
 - Built-in log panel for debugging (copy logs to clipboard)
 - Configurable via `config.local.json` or modern extension popup (Material Design 3, dark mode, theme toggle, test buttons)
 - Circuit breaker: validates config before making API calls
 - GitHub PAT support for higher API rate limits and private repo access
+
+### Description Style (universal, corpus-informed)
+
+Prompt wording is calibrated against an analysis of 470 merged PRs from 94 top-starred repositories, and per-repo behavior is **discovered live for any repository** — no hardcoded repo list:
+
+- **Live template discovery** — the repo's own `PULL_REQUEST_TEMPLATE` (in `.github/`, `docs/`, or the repo root, incl. multi-template directories) is fetched from GitHub and used as the structure to fill; results are cached for 6 hours
+- **Live convention inference** — the extension samples the repo's recently merged PRs, filters out bots, and infers the dominant title convention (conventional commits, `subsystem: verb`, `[Area]`, plain imperative, …) and typical description length from real human examples
+- **Proportional output** — small diffs get compact descriptions (Summary + Testing) instead of a fixed multi-section scaffold
+- **Render-quality contract** — descriptions follow the presentation rules of the best merged PRs (`analysis/pull-requests/PRESENTATION.md`): fenced code blocks for commands, tables with verdict captions for comparisons, one-line bold-label bullets, numbered testing steps with expected outcomes, and a mandatory closing artifact
+- **Template fidelity** — existing PR templates are preserved byte-for-byte (headers, HTML comments, checkboxes); already-written text is completed, never rewritten
+- **Evidence-based testing** — Testing sections prefer copy-pasteable commands and quantified results over prose claims
+- **Bot-signature stripping** — hallucinated "Summary by CodeRabbit"-style blocks, badges, and AI credit lines are removed from generated output
+- **Anchor guard** — every file named in the description carries a clickable `diffhunk://` link when the diff provided one; a missing-anchor generation is logged as a warning
 
 ---
 
@@ -120,6 +134,7 @@ Click the extension icon in Chrome's toolbar to open the modern settings popup. 
 - Settings saved to `chrome.storage.local` and override `config.local.json`
 - **Test API** button — validates endpoint + key with a quick chat request
 - **Test GitHub** button — validates your PAT against `api.github.com/user`
+- **Thinking Effort** button group (`none`, `default`, `minimal`, `low`, `medium`, `high`, `max`) — sent to the API as `reasoning_effort`; `default` omits the field
 - Collapsible **Diff Settings** section (`diffEnabled`, `diffMaxLines`, `diffMaxBytes`)
 
 ### Configuration Validation
@@ -227,6 +242,24 @@ bun run test:full
 # Run PR creation page prompt test (checks prompt includes commit coverage instruction)
 bun run test:pr-creation
 
+# Run offline unit tests (no GitHub/LLM access needed):
+# prompt logic, mirror-vs-src drift, template detection, style-note injection
+bun run test:logic
+
+# bot-signature stripping and template preservation tests
+bun run test:parse
+
+# render-quality contract assertions (fences, tables, bullet caps, anchor rules)
+bun run test:format
+
+# LIVE render-quality acceptance — calls the configured local LLM and checks
+# the generated description for fences, anchors, numbered steps, line lengths
+# (not part of `bun run test`; requires the API endpoint to be running)
+bun run test:format-live
+
+# repo-style inference tests (title conventions, length buckets, template detection)
+bun run test:style
+
 # Run all tests
 bun run test
 ```
@@ -292,7 +325,10 @@ github-pr-generator/
 │   ├── commit-coverage.ts
 │   ├── extension-coverage.ts
 │   ├── full-coverage.ts
-│   └── pr-creation-prompt.ts
+│   ├── pr-creation-prompt.ts
+│   ├── prompt-logic.ts            # offline unit tests (prompt wording, mirror drift, style injection)
+│   ├── repo-style.ts              # repo-style inference tests (titles, length, template detection)
+│   └── parse.ts                   # bot-signature stripping / template preservation tests
 ├── config.local.json              # Your API config (gitignored, copied to dist/ if present)
 ├── config.local.example.json      # Config template (tracked)
 ├── .gitignore

@@ -1,4 +1,4 @@
-import type { GhPrDetails, TestPrRef } from "./shared";
+import type { FileChange, GhPrDetails, TestPrRef } from "./shared";
 import { fetchPRDetails, loadConfig, runGhCommand } from "./shared";
 
 export interface CoverageDetail {
@@ -55,6 +55,62 @@ export function logCommitCoverageVerdict(coverage: number, coveragePercent: stri
   } else {
     console.log(`\n❌ TEST FAILED: Poor commit coverage (${coveragePercent}%) - many commits missing`);
   }
+}
+
+// Logs the per-commit coverage lines and computes the percentage.
+export function logCoverageBreakdown(
+  header: string,
+  details: CoverageDetail[],
+): { covered: number; coverage: number; coveragePercent: string } {
+  console.log(header);
+  details.forEach((d) => {
+    const status = d.covered ? "✓ COVERED" : "✗ MISSING";
+    console.log(`  ${status}: ${d.headline}`);
+  });
+  const covered = details.filter((d) => d.covered).length;
+  const coverage = (covered / details.length) * 100;
+  const coveragePercent = coverage.toFixed(1);
+  return { covered, coverage, coveragePercent };
+}
+
+// Full "breakdown + SUMMARY + verdict" block used by the commit-coverage and
+// extension-coverage scripts; `summaryLabel` is the label of the count line.
+export function logCoverageVerdictBlock(
+  header: string,
+  summaryLabel: string,
+  details: CoverageDetail[],
+): { covered: number; coverage: number; coveragePercent: string } {
+  const result = logCoverageBreakdown(header, details);
+  console.log("\n=== SUMMARY ===");
+  console.log(`${summaryLabel}: ${String(result.covered)}/${String(details.length)} (${result.coveragePercent}%)`);
+  logCommitCoverageVerdict(result.coverage, result.coveragePercent);
+  return result;
+}
+
+// Logs the prompt-analysis block shared by the full-coverage and pr-creation
+// scripts, then reports how many commits are represented in the summary.
+export function logPromptAnalysis(
+  header: string,
+  prompt: string,
+  changesSummary: string,
+  commits: string[],
+  files: FileChange[],
+  diffText: string | null,
+  existingBody: string,
+  existingBodyNote: string,
+): number {
+  const diffIncluded = diffText !== null ? `Yes (${String(diffText.length)} chars)` : "No";
+  console.log(header);
+  console.log(`Prompt length: ${String(prompt.length)} chars`);
+  console.log(`Changes summary length: ${String(changesSummary.length)} chars`);
+  console.log(`Commits in prompt: ${String(commits.length)}`);
+  console.log(`Files in prompt: ${String(files.length)}`);
+  console.log(`Diff included: ${diffIncluded}`);
+  console.log(`Existing body length: ${String(existingBody.length)} chars${existingBodyNote}`);
+
+  const coveredInSummary = countCoveredCommits(commits, changesSummary);
+  console.log(`\nCommits represented in changes summary: ${String(coveredInSummary)}/${String(commits.length)}`);
+  return coveredInSummary;
 }
 
 type TestFn = (ctx: TestContext) => CoverageResult | Promise<CoverageResult>;

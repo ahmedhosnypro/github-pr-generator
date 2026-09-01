@@ -76,36 +76,50 @@ function emitAnchoredFiles(
   return { text, refNum };
 }
 
-// Add hunk ranges for files found in the diff but missing a DOM diffAnchor
-function emitUnanchoredHunks(
+function emitUnanchoredHunksCapped(
   hunkRanges: GitHubHunksByFile | null,
   seenFiles: Record<string, boolean>,
   startRefNum: number,
+  cap: number,
 ): EmitResult {
   let text = "";
   let refNum = startRefNum;
   if (!hunkRanges || Object.keys(hunkRanges).length === 0) return { text, refNum };
+  let emitted = 0;
   for (const filePath of Object.keys(hunkRanges)) {
+    if (emitted >= cap) break;
     const fileHunks = hunkRanges[filePath];
     if (seenFiles[filePath] || !fileHunks) continue;
     for (const hunk of fileHunks) {
       text += unanchoredHunkLine(refNum, filePath, hunk);
       refNum++;
+      emitted++;
+      if (emitted >= cap) break;
     }
   }
   return { text, refNum };
 }
 
 export function buildAnchorsSection(fileChanges: FileChange[], hunkRanges: GitHubHunksByFile | null): string {
+  // Cap anchors section for huge diffs — the prompt can only usefully reference
+  // the first N files. We still log all available anchors for observability.
+  const MAX_ANCHOR_FILES = 50;
+
   let summary = "## File Anchors and Hunk Line Ranges\n\n";
   summary +=
-    "Use these attachment points to create clickable diff links. Format: `[[N]](diffhunk://#diff-HASH_Lstart-Rend)` where N is a sequential reference number.\n\n";
+    "Use these attachment points to create clickable diff links. Format: `[[N]](diffhunk://#diff-HASH_Lstart-Rend)` where N is a sequential reference number. Only the files listed above have anchors — never invent `[[N]]` links for other files.\n\n";
 
   const seenFiles: Record<string, boolean> = {};
   const anchored = emitAnchoredFiles(fileChanges, hunkRanges, seenFiles, 1);
 
   summary += anchored.text;
-  summary += emitUnanchoredHunks(hunkRanges, seenFiles, anchored.refNum).text;
+
+  // Only emit unanchored hunks up to the cap to keep prompt size bounded
+  const cap = Math.max(0, MAX_ANCHOR_FILES - Object.keys(seenFiles).length);
+  if (cap > 0) {
+    const capped = emitUnanchoredHunksCapped(hunkRanges, seenFiles, anchored.refNum, cap);
+    summary += capped.text;
+  }
 
   summary += "\n**Diff Link Examples**\n";
   summary +=

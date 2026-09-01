@@ -1,4 +1,5 @@
-import { diffConditionalFields, diffEnabledInput, lastSavedEl, toast } from "./elements";
+import { THINKING_EFFORTS, type ThinkingEffort } from "../types";
+import { diffConditionalFields, diffEnabledInput, lastSavedEl, thinkingEffortGroup, toast } from "./elements";
 
 export const COLOR_ERROR = "var(--md-sys-color-error)";
 export const COLOR_OK = "var(--md-sys-color-tertiary)";
@@ -38,4 +39,20 @@ export function updateDiffConditionalVisibility(): void {
   } else {
     diffConditionalFields.classList.add("hidden");
   }
+}
+
+/** Normalizes any incoming string (storage, config file, dataset) to a valid ThinkingEffort. */
+export function toThinkingEffort(value: string | null | undefined): ThinkingEffort {
+  return THINKING_EFFORTS.find((effort) => effort === value) ?? "default";
+}
+
+export function selectThinkingEffort(effort: ThinkingEffort): void {
+  for (const button of thinkingEffortGroup.querySelectorAll<HTMLButtonElement>("[data-effort]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.effort === effort));
+  }
+}
+
+export function getSelectedThinkingEffort(): ThinkingEffort {
+  const selected = thinkingEffortGroup.querySelector<HTMLButtonElement>('[data-effort][aria-pressed="true"]');
+  return toThinkingEffort(selected?.dataset.effort);
 }

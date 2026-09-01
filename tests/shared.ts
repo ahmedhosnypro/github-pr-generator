@@ -11,6 +11,9 @@ export interface TestPrRef {
 export interface Config {
   githubToken?: string;
   testPr?: TestPrRef;
+  apiEndpoint?: string;
+  apiKey?: string;
+  model?: string;
 }
 
 export interface GhCommit {

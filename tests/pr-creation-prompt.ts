@@ -1,39 +1,39 @@
-import { buildChangesSummary, buildCombinedPrompt, buildSummaryData, fetchPRDiff } from "./prompt";
-import { fetchPRCommits, fetchPRFiles } from "./shared";
+import { buildPromptFromContext } from "./prompt";
 import type { CoverageResult, TestContext } from "./testkit";
-import { countCoveredCommits, runTest } from "./testkit";
+import { runTest } from "./testkit";
 
-function logPromptAnalysis(
-  prompt: string,
-  changesSummary: string,
-  commitCount: number,
-  fileCount: number,
-  diffText: string | null,
-  existingBody: string,
-): void {
-  const diffIncluded = diffText !== null ? `Yes (${String(diffText.length)} chars)` : "No";
-  console.log("\n=== PR Creation Page Prompt Analysis ===");
-  console.log(`Prompt length: ${String(prompt.length)} chars`);
-  console.log(`Changes summary length: ${String(changesSummary.length)} chars`);
-  console.log(`Commits in prompt: ${String(commitCount)}`);
-  console.log(`Files in prompt: ${String(fileCount)}`);
-  console.log(`Diff included: ${diffIncluded}`);
-  console.log(`Existing body length: ${String(existingBody.length)} chars (simulated empty)`);
-}
+const CORPUS_WORDING_ASSERTIONS: [string, string, boolean][] = [
+  ["A1", "scaled to the change", true],
+  ["A4", "copy-pasteable", true],
+  ["A8", "Match the repo's title style", true],
+  ["A7", "Do NOT imitate bot output", true],
+  ["A2", "root cause in one line", true],
+  ["A3 (section removed)", "## Breaking Changes\nAny", false],
+];
 
-function evaluatePrompt(commits: string[], changesSummary: string, prompt: string): CoverageResult {
-  const coveredInSummary = countCoveredCommits(commits, changesSummary);
-  console.log(`\nCommits represented in changes summary: ${String(coveredInSummary)}/${String(commits.length)}`);
-
+function evaluatePrompt(commits: string[], prompt: string, coveredInSummary: number): CoverageResult {
   const hasCommitCoverageSection = prompt.includes("Commit Coverage") && prompt.includes("MUST cover every commit");
   console.log(
     `Prompt includes Commit Coverage section: ${hasCommitCoverageSection ? "Yes" : "No"} (expected: Yes - no existing body)`,
   );
 
+  let wordingOk = true;
+  console.log("\nCorpus-wording assertions:");
+  for (const [label, needle, expected] of CORPUS_WORDING_ASSERTIONS) {
+    const found = prompt.includes(needle);
+    const ok = found === expected;
+    if (!ok) wordingOk = false;
+    console.log(`  ${ok ? "✅" : "❌"} ${label}: ${needle.slice(0, 50)}`);
+  }
+
   const promptHasAllCommits = coveredInSummary === commits.length;
-  if (promptHasAllCommits && hasCommitCoverageSection) {
+  if (promptHasAllCommits && hasCommitCoverageSection && wordingOk) {
     console.log("\n✅ TEST PASSED: PR creation page prompt includes all commits and coverage instruction");
     return { passed: true };
+  }
+  if (promptHasAllCommits && hasCommitCoverageSection) {
+    console.log("\n⚠️  TEST PARTIAL: Prompt structurally fine but corpus-wording assertion(s) failed");
+    return { passed: false };
   }
   if (promptHasAllCommits) {
     console.log("\n⚠️  TEST PARTIAL: Prompt includes all commits but missing coverage instruction");
@@ -44,18 +44,14 @@ function evaluatePrompt(commits: string[], changesSummary: string, prompt: strin
 }
 
 async function testPRCreationPagePrompt(ctx: TestContext): Promise<CoverageResult> {
-  const { testPr, prDetails, githubToken } = ctx;
-  const commits = fetchPRCommits(testPr);
-  const files = fetchPRFiles(testPr);
-  const diffText = await fetchPRDiff(testPr, githubToken);
-
-  const existingBody = ""; // Simulate PR creation page - no existing body
-  const data = buildSummaryData(prDetails, commits, files, existingBody);
-  const changesSummary = buildChangesSummary(data, diffText);
-  const prompt = buildCombinedPrompt(changesSummary, existingBody);
-
-  logPromptAnalysis(prompt, changesSummary, commits.length, files.length, diffText, existingBody);
-  return evaluatePrompt(commits, changesSummary, prompt);
+  // Simulate PR creation page - no existing body
+  const { commits, prompt, coveredInSummary } = await buildPromptFromContext(
+    ctx,
+    "",
+    "\n=== PR Creation Page Prompt Analysis ===",
+    " (simulated empty)",
+  );
+  return evaluatePrompt(commits, prompt, coveredInSummary);
 }
 
 await runTest("=== GitHub PR Generator - PR Creation Page Prompt Test ===", testPRCreationPagePrompt);

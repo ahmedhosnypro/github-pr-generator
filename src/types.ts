@@ -4,12 +4,21 @@
  * the GitHub/LLM API data shapes.
  */
 
+/**
+ * OpenAI-compatible reasoning/thinking effort levels ("reasoning_effort"
+ * request field). "default" omits the field, letting the provider decide.
+ */
+export type ThinkingEffort = "none" | "default" | "minimal" | "low" | "medium" | "high" | "max";
+
+export const THINKING_EFFORTS: ThinkingEffort[] = ["none", "default", "minimal", "low", "medium", "high", "max"];
+
 /** Fully-resolved runtime configuration (chrome.storage merged over config.local.json). */
 export interface ExtensionConfig {
   apiEndpoint: string;
   apiKey: string;
   model: string;
   githubToken: string;
+  thinkingEffort: ThinkingEffort;
   diffEnabled: boolean;
   diffMaxLines: number;
   diffMaxBytes: number;
@@ -21,6 +30,7 @@ export interface FileConfig {
   apiKey?: string;
   model?: string;
   githubToken?: string;
+  thinkingEffort?: ThinkingEffort;
   diffEnabled?: boolean;
   diffMaxLines?: number;
   diffMaxBytes?: number;
@@ -32,6 +42,7 @@ export interface StoredConfig {
   apiKey?: string;
   model?: string;
   githubToken?: string;
+  thinkingEffort?: string;
   diffEnabled?: boolean | string;
   diffMaxLines?: number | string;
   diffMaxBytes?: number | string;
@@ -43,6 +54,7 @@ export interface SaveConfigData {
   apiKey?: string;
   model?: string;
   githubToken?: string;
+  thinkingEffort?: string;
   diffEnabled?: boolean | string;
   diffMaxLines?: string | number;
   diffMaxBytes?: string | number;
@@ -85,11 +97,16 @@ export interface GenerateData {
   existingBody?: string;
 }
 
+/** How the opened-PR "AI Title" action treats the current title. */
+export type TitleGenerationMode = "improve" | "fresh";
+
 /** Payload of the generate* messages sent from opened-PR and merge-confirmation pages. */
 export interface OpenedPRData {
   owner?: string;
   repo?: string;
   prNumber?: string;
+  /** "fresh" generates a title from the PR alone, hiding the current title from the prompt entirely. */
+  titleMode?: TitleGenerationMode;
   existingTitle?: string;
   existingDescription?: string;
   existingMergeTitle?: string;

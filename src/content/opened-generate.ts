@@ -1,4 +1,5 @@
 import type { GenerateDescriptionResponse, GenerateTitleResponse } from "../responses";
+import type { TitleGenerationMode } from "../types";
 import { BTN_OPENED_DESC_ID, BTN_OPENED_TITLE_ID } from "./constants";
 import { clearButtonLoading, getButton, setButtonLoading, showToast } from "./dom";
 import { errorMessage, errorStack } from "./errors";
@@ -11,7 +12,7 @@ import {
   extractOwnerRepoPRNumber,
 } from "./opened-scrape";
 
-export function handleGenerateOpenedTitle(): void {
+export function handleGenerateOpenedTitle(mode: TitleGenerationMode = "improve"): void {
   const btn = getButton(BTN_OPENED_TITLE_ID);
   if (!btn || btn.disabled) {
     log("warn", "Opened title button not found or disabled");
@@ -21,13 +22,13 @@ export function handleGenerateOpenedTitle(): void {
   const openedDescBtn = getButton(BTN_OPENED_DESC_ID);
   if (openedDescBtn) setButtonLoading(openedDescBtn);
 
-  void generateOpenedTitle().finally(() => {
+  void generateOpenedTitle(mode).finally(() => {
     clearButtonLoading(btn);
     if (openedDescBtn) clearButtonLoading(openedDescBtn);
   });
 }
 
-async function generateOpenedTitle(): Promise<void> {
+async function generateOpenedTitle(mode: TitleGenerationMode): Promise<void> {
   try {
     const ctx = extractOwnerRepoPRNumber();
     const existingTitle = extractExistingOpenedTitle();
@@ -36,13 +37,14 @@ async function generateOpenedTitle(): Promise<void> {
       showToast("Could not determine PR owner/repo/number from URL.", true);
       return;
     }
-    log("info", "handleGenerateOpenedTitle - " + JSON.stringify(ctx));
+    log("info", "handleGenerateOpenedTitle (" + mode + ") - " + JSON.stringify(ctx));
     const response = await sendToBackground<GenerateTitleResponse>({
       type: "generateTitle",
       data: {
         owner: ctx.owner,
         repo: ctx.repo,
         prNumber: ctx.prNumber,
+        titleMode: mode,
         existingTitle,
         branchContext,
       },
@@ -53,6 +55,10 @@ async function generateOpenedTitle(): Promise<void> {
       return;
     }
     if (response.updated) {
+      log(
+        "info",
+        "Title updated - mode: " + mode + " | old title: " + existingTitle + " | new title: " + response.title,
+      );
       showToast("PR title updated via GitHub API!");
     } else {
       showToast("Title generated but update status unknown.");

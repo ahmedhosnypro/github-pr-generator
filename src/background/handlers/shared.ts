@@ -18,6 +18,13 @@ export interface GatheredPRData {
   hunkRanges: GitHubHunksByFile | null;
 }
 
+export interface FieldUpdatePreparation {
+  config: ExtensionConfig;
+  gathered: GatheredPRData;
+  linkedIssues: string[];
+  stats: PRStats;
+}
+
 export async function getValidatedConfig(): Promise<ExtensionConfig> {
   const config = await getConfig();
   const configError = validateConfig(config);
@@ -75,7 +82,7 @@ const ISSUE_PATTERNS = [
   /#([1-9]\d{2,})/g,
 ];
 
-export function extractLinkedIssues(commits: CommitInfo[]): string[] {
+function extractLinkedIssues(commits: CommitInfo[]): string[] {
   const linkedIssues: string[] = [];
   for (const commit of commits) {
     for (const pattern of ISSUE_PATTERNS) {
@@ -98,4 +105,28 @@ export function buildStats(prDetails: GitHubPRDetails, fileChanges: FileChange[]
     additions: prDetails.additions || 0,
     deletions: prDetails.deletions || 0,
   };
+}
+
+// Shared prologue of the title/description update handlers: log the request,
+// require a configured GitHub token (the field update will need it), then
+// gather PR data and derive linked issues plus stats.
+export async function gatherForFieldUpdate(
+  label: string,
+  data: OpenedPRData,
+  tokenRequiredMessage: string,
+): Promise<FieldUpdatePreparation> {
+  logMsg(
+    label + " - owner: " + (data.owner || "") + ", repo: " + (data.repo || "") + ", prNumber: " + (data.prNumber || ""),
+  );
+
+  const config = await getValidatedConfig();
+
+  if (!config.githubToken) {
+    throw new Error(tokenRequiredMessage);
+  }
+
+  const gathered = await gatherPRData(label, config, data);
+  const linkedIssues = extractLinkedIssues(gathered.commits);
+  const stats = buildStats(gathered.prDetails, gathered.fileChanges);
+  return { config, gathered, linkedIssues, stats };
 }

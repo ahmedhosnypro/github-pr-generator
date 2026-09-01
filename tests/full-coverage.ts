@@ -1,31 +1,12 @@
-import { buildChangesSummary, buildCombinedPrompt, buildSummaryData, fetchPRDiff } from "./prompt";
-import { fetchPRCommits, fetchPRFiles } from "./shared";
+import { buildPromptFromContext } from "./prompt";
 import type { CoverageResult, TestContext } from "./testkit";
-import { computeCoverageDetails, countCoveredCommits, runTest } from "./testkit";
+import { computeCoverageDetails, logCoverageBreakdown, runTest } from "./testkit";
 
 interface FullCoverageInput {
   coveredInSummary: number;
   totalCommits: number;
   hasCommitCoverageSection: boolean;
   existingBody: string;
-}
-
-function logPromptAnalysis(
-  prompt: string,
-  changesSummary: string,
-  commitCount: number,
-  fileCount: number,
-  diffText: string | null,
-  existingBody: string,
-): void {
-  const diffIncluded = diffText !== null ? `Yes (${String(diffText.length)} chars)` : "No";
-  console.log("\n=== Extension Prompt Analysis ===");
-  console.log(`Prompt length: ${String(prompt.length)} chars`);
-  console.log(`Changes summary length: ${String(changesSummary.length)} chars`);
-  console.log(`Commits in prompt: ${String(commitCount)}`);
-  console.log(`Files in prompt: ${String(fileCount)}`);
-  console.log(`Diff included: ${diffIncluded}`);
-  console.log(`Existing body length: ${String(existingBody.length)} chars`);
 }
 
 function logSummary(input: FullCoverageInput, coveragePercent: string, covered: number): void {
@@ -79,35 +60,23 @@ function evaluateDescriptionCoverage(
   prDescription: string,
   input: FullCoverageInput,
 ): CoverageResult {
-  const { covered, details } = computeCoverageDetails(commits, prDescription);
-
-  console.log("\n=== PR Description Commit Coverage ===");
-  details.forEach((d) => {
-    const status = d.covered ? "✓ COVERED" : "✗ MISSING";
-    console.log(`  ${status}: ${d.headline}`);
-  });
-
-  const coverage = (covered / commits.length) * 100;
-  const coveragePercent = coverage.toFixed(1);
+  const { details } = computeCoverageDetails(commits, prDescription);
+  const { covered, coverage, coveragePercent } = logCoverageBreakdown(
+    "\n=== PR Description Commit Coverage ===",
+    details,
+  );
   logSummary(input, coveragePercent, covered);
   return buildResult(input, coverage, coveragePercent, covered);
 }
 
 async function testGeneratedDescriptionCoverage(ctx: TestContext): Promise<CoverageResult> {
-  const { testPr, prDetails, githubToken } = ctx;
-  const commits = fetchPRCommits(testPr);
-  const files = fetchPRFiles(testPr);
-  const diffText = await fetchPRDiff(testPr, githubToken);
-
-  const existingBody = prDetails.body ?? "";
-  const data = buildSummaryData(prDetails, commits, files, existingBody);
-  const changesSummary = buildChangesSummary(data, diffText);
-  const prompt = buildCombinedPrompt(changesSummary, existingBody);
-
-  logPromptAnalysis(prompt, changesSummary, commits.length, files.length, diffText, existingBody);
-
-  const coveredInSummary = countCoveredCommits(commits, changesSummary);
-  console.log(`\nCommits represented in changes summary: ${String(coveredInSummary)}/${String(commits.length)}`);
+  const existingBody = ctx.prDetails.body ?? "";
+  const { commits, prompt, coveredInSummary } = await buildPromptFromContext(
+    ctx,
+    existingBody,
+    "\n=== Extension Prompt Analysis ===",
+    "",
+  );
 
   const hasCommitCoverageSection = prompt.includes("Commit Coverage") && prompt.includes("MUST cover every commit");
   console.log(`Prompt includes Commit Coverage section: ${hasCommitCoverageSection ? "Yes" : "No"}`);

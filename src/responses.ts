@@ -32,6 +32,15 @@ export interface MessageErrorResponse {
   error: string;
 }
 
+/** Result posted on the streaming port's "done" message. */
+export type StreamedResult = GenerateResponse | GenerateMergeTitleResponse | GenerateMergeDescriptionResponse;
+
+/** Messages posted by the background over the streaming port (see STREAM_PORT_NAME). */
+export type StreamPortMessage =
+  | { kind: "chunk"; text: string }
+  | { kind: "done"; result: StreamedResult }
+  | { kind: "error"; error: string };
+
 export interface GetConfigResponse {
   apiEndpoint: string;
   model: string;

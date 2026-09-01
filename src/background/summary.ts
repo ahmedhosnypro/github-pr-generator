@@ -66,6 +66,11 @@ function buildStatsSection(stats: PRStats): string {
   return section;
 }
 
+export function hasUsableAnchors(fileChanges: FileChange[] | undefined, hunkRanges: GitHubHunksByFile | null): boolean {
+  if (hunkRanges && Object.keys(hunkRanges).length > 0) return true;
+  return !!fileChanges?.some((fc) => fc.diffAnchor.length > 5);
+}
+
 export function buildChangesSummary(
   data: GenerateData,
   diffText: string | null,
@@ -75,8 +80,7 @@ export function buildChangesSummary(
 
   // Inject File Anchors and Hunk Line Ranges section
   if (data.fileChanges && data.fileChanges.length > 0) {
-    const hasAnchors = data.fileChanges.some((fc) => fc.diffAnchor.length > 5);
-    if ((hunkRanges && Object.keys(hunkRanges).length > 0) || hasAnchors) {
+    if (hasUsableAnchors(data.fileChanges, hunkRanges)) {
       summary += buildAnchorsSection(data.fileChanges, hunkRanges);
     }
   }

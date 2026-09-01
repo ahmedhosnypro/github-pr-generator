@@ -4,5 +4,5 @@
   "minLines": 5,
   "format": ["typescript"],
   "path": ["src", "tests", "scripts"],
-  "ignore": ["**/dist/**", "**/node_modules/**", "**/*.test.ts"]
+  "ignore": ["**/dist/**", "**/node_modules/**"]
 }
