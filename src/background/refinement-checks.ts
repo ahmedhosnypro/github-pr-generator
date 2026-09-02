@@ -61,10 +61,17 @@ function checkBoldLabelBullets(description: string, stats: PRStats | null): Chec
 
 function checkAnchors(description: string): CheckResult | null {
   const anchorCount = (description.match(/diffhunk:\/\//g) ?? []).length;
+  // Bare [[N]] markers without the diffhunk:// URL link silently break the
+  // anchors' whole purpose — detect them separately.
+  const bareMarkers = (description.match(/\[\[\d+\]\]\s*(?!\()/g) ?? []).length;
+  const failures: Array<{ check: string; detail: string }> = [];
   if (anchorCount < 3) {
-    return { score: 0, failures: [{ check: "anchors", detail: `${anchorCount} anchors` }] };
+    failures.push({ check: "anchors", detail: `${anchorCount} anchors` });
   }
-  return null;
+  if (bareMarkers > 0) {
+    failures.push({ check: "anchors", detail: `${bareMarkers} bare [[N]] refs without links` });
+  }
+  return failures.length > 0 ? { score: 0, failures } : null;
 }
 
 function checkTestingSteps(description: string, stats: PRStats | null): CheckResult | null {

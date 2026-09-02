@@ -54,7 +54,8 @@ function createLogPanel(): void {
   panel.appendChild(body);
   document.body.appendChild(panel);
   header.querySelector(".ai-log-close")?.addEventListener("click", () => {
-    panel.style.display = panel.style.display === "none" ? "flex" : "none";
+    // Close must hide even when a footer button exists — not a toggle.
+    panel.style.display = "none";
   });
   header.querySelector(".ai-log-copy")?.addEventListener("click", () => {
     copyLogsToClipboard(body);
@@ -91,15 +92,24 @@ function loadSavedLogs(bodyEl: Element): void {
   });
 }
 
-function saveLogToStorage(msg: string): void {
-  chrome.storage.local.get<LogStorage>(LOG_KEY, (result) => {
-    const logs = result[LOG_KEY] ?? [];
-    const ts = new Date().toLocaleTimeString() + " | " + msg;
-    logs.push(ts);
-    const trimmed = logs.length > 200 ? logs.slice(-200) : logs;
-    const obj: LogStorage = { [LOG_KEY]: trimmed };
-    void chrome.storage.local.set(obj);
+// Serializes storage writes so two log() calls in quick succession don't
+// read the same array and both write — losing the first entry silently.
+let logWriteChain: Promise<void> = Promise.resolve();
+
+function appendLogToStorage(ts: string): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get<LogStorage>(LOG_KEY, (result) => {
+      const logs = result[LOG_KEY] ?? [];
+      logs.push(ts);
+      const trimmed = logs.length > 200 ? logs.slice(-200) : logs;
+      chrome.storage.local.set({ [LOG_KEY]: trimmed }, resolve);
+    });
   });
+}
+
+function saveLogToStorage(msg: string): void {
+  const ts = new Date().toLocaleTimeString() + " | " + msg;
+  logWriteChain = logWriteChain.then(() => appendLogToStorage(ts));
 }
 
 export function injectLogToggleButton(): void {

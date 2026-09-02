@@ -117,6 +117,14 @@ export function getConfig(): Promise<ExtensionConfig> {
   return new Promise((resolve) => {
     void configLoadPromise.then(() => {
       chrome.storage.local.get(CONFIG_STORAGE_KEYS, (stored: StoredConfig) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          // Storage read failed — never leave callers waiting indefinitely;
+          // emit defaults and log it.
+          logMsg("getConfig storage read failed: " + String(err.message));
+          resolve(mergeConfig({}));
+          return;
+        }
         resolve(mergeConfig(stored));
       });
       return undefined;

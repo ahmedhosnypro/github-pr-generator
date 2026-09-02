@@ -48,7 +48,15 @@ async function fetchPage(
     return { error: "GITHUB_API_ERROR", status: response.status };
   }
 
-  return (await response.json()) as unknown[];
+  const body: unknown = await response.json();
+  // GitHub's list endpoints must return arrays; a non-array 2xx (e.g. a proxy
+  // or a migrated endpoint returning an object) should NOT silently flow to
+  // callers as if it were a page of items.
+  if (!Array.isArray(body)) {
+    logMsg("GitHub API returned non-array body for " + label + " page " + String(page));
+    return { error: "GITHUB_API_ERROR", status: response.status };
+  }
+  return body as unknown[];
 }
 
 // Paginates a GitHub REST list endpoint (100 per page, stops on a short page),

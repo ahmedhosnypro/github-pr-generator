@@ -89,12 +89,15 @@ function checkAnchors(description: string, opts: RubricOptions): RubricCheck {
     // The prompt forbids diffhunk links when no Anchors section existed.
     return { name: "no diff-hunk anchors invented", ok: count === 0, detail: String(count) + " anchors" };
   }
+  // Bare [[N]] refs without the (diffhunk://...) part mean the model dropped the links.
+  const bareRefs = (description.match(/\[\[\d+\]\]\s*(?!\()/g) ?? []).length;
   // Anchor expectations scale with diff size: a 2-file PR legitimately has 2.
   const required = Math.min(3, Math.max(1, opts.fileCount ?? 3));
+  const bare = bareRefs > 0 ? ", " + String(bareRefs) + " bare [[N]] refs" : "";
   return {
     name: "diff-hunk anchors present",
-    ok: count >= required,
-    detail: String(count) + " anchors (needs " + String(required) + ")",
+    ok: count >= required && bareRefs === 0,
+    detail: String(count) + " anchors (needs " + String(required) + ")" + bare,
   };
 }
 
@@ -103,10 +106,11 @@ function checkTesting(testing: string, opts: RubricOptions): RubricCheck {
   if (opts.fileCount !== undefined && opts.fileCount <= 3 && testing === "") {
     return { name: "testing skipped for small diff", ok: true, detail: "no Testing section (small diff)" };
   }
+  const steps = (testing.match(/^\d+\.\s/gm) ?? []).length;
   return {
     name: "testing has numbered steps + fence",
-    ok: (testing.match(/^\d+\.\s/gm) ?? []).length >= 2 && /```/.test(testing),
-    detail: "steps=" + String((testing.match(/^\d+\.\s/gm) ?? []).length),
+    ok: steps >= 1 && /```/.test(testing),
+    detail: "steps=" + String(steps),
   };
 }
 

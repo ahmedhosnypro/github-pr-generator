@@ -27,7 +27,11 @@ const FULL_DESCRIPTION = [
   "Scope: 3 files, +10/-2",
 ].join("\n");
 
-async function main(): Promise<void> {
+const SMALL_STATS = { files: 1, additions: 5, deletions: 2 };
+const LARGE_STATS = { files: 12, additions: 600, deletions: 40 };
+
+// Anchors only demanded when the PR has usable scrape targets (run 5/8).
+async function testAnchorGating(): Promise<void> {
   const noAnchorDescription = FULL_DESCRIPTION.replaceAll(/\s*\[\[\d+\]\]\(diffhunk:\/\/[^)]+\)/g, "");
 
   const withAnchors = await scoreDescription(noAnchorDescription, [], false);
@@ -56,41 +60,42 @@ async function main(): Promise<void> {
     good.failures.length === 0 && good.score === good.maxScore,
     true,
   );
+}
 
-  // Proportional-size check (corpus: small diffs deserve small descriptions).
-  const smallStats = { files: 1, additions: 5, deletions: 2 };
-  const largeStats = { files: 12, additions: 600, deletions: 40 };
-  const paddedDescription = `${FULL_DESCRIPTION}\n\n${"filler words to inflate this description far beyond what a small diff needs ".repeat(20)}`;
-  const bloated = await scoreDescription(paddedDescription, [], false, smallStats);
+// Size proportionality (run 13): small diffs get a 200-word cap, others don't.
+async function testProportionalSize(): Promise<void> {
+  const padded = `${FULL_DESCRIPTION}\n\n${"filler words to inflate this description far beyond what a small diff needs ".repeat(20)}`;
+  const bloated = await scoreDescription(padded, [], false, SMALL_STATS);
   expectMatch(
     "oversized description for small diff flagged",
     bloated.failures.some((f) => f.check === "proportionalSize"),
     true,
   );
   expectMatch("proportional check adds one point to max", bloated.maxScore, 12);
-  const compact = await scoreDescription("## Summary\nFixed the config path.", [], false, smallStats);
+  const compact = await scoreDescription("## Summary\nFixed the config path.", [], false, SMALL_STATS);
   expectMatch(
     "compact description escapes size flag",
     compact.failures.some((f) => f.check === "proportionalSize"),
     false,
   );
-  const bigDiff = await scoreDescription(paddedDescription, [], false, largeStats);
+  const bigDiff = await scoreDescription(padded, [], false, LARGE_STATS);
   expectMatch(
     "large diffs have no size cap",
     bigDiff.failures.some((f) => f.check === "proportionalSize"),
     false,
   );
-  const noStats = await scoreDescription(paddedDescription, [], false, null);
+  const noStats = await scoreDescription(padded, [], false, null);
   expectMatch(
     "no size check without stats",
     noStats.maxScore === 11 && !noStats.failures.some((f) => f.check === "proportionalSize"),
     true,
   );
+}
 
-  // Small-diff scaffolding leniency (run 37): compact output on a small diff
-  // must not be penalized for missing Changes/Testing/fence sections.
-  const compactSummaryOnly = "## Summary\nFixed the token expiry race.\n\nScope: 1 file, +5/-2";
-  const lenient = await scoreDescription(compactSummaryOnly, [], false, smallStats);
+// Small-diff leniency (run 37): no scaffold sections required on small diffs.
+async function testSmallDiffLeniency(): Promise<void> {
+  const compact = "## Summary\nFixed the token expiry race.\n\nScope: 1 file, +5/-2";
+  const lenient = await scoreDescription(compact, [], false, SMALL_STATS);
   expectMatch(
     "small diff: missing scaffolding is fine",
     lenient.failures.every(
@@ -102,23 +107,23 @@ async function main(): Promise<void> {
     ),
     true,
   );
-  // Same output on a large diff MUST be penalized — leniency is not universal.
-  const strictOnLarge = await scoreDescription(compactSummaryOnly, [], false, largeStats);
+  const strictOnLarge = await scoreDescription(compact, [], false, LARGE_STATS);
   expectMatch(
     "large diff: missing scaffolding is still flagged",
     strictOnLarge.failures.some((f) => f.check === "boldLabelBullets") &&
       strictOnLarge.failures.some((f) => f.check === "testingSteps"),
     true,
   );
-  // Fences remain required when they exist (unbalanced) — small or large.
-  const oneFence = compactSummaryOnly + "\n```bash\nbun run test\n";
+  const oneFence = compact + "\n```bash\nbun run test\n";
   expectMatch(
     "unbalanced fence fails even on small diff",
-    (await scoreDescription(oneFence, [], false, smallStats)).failures.some((f) => f.check === "fences"),
+    (await scoreDescription(oneFence, [], false, SMALL_STATS)).failures.some((f) => f.check === "fences"),
     true,
   );
+}
 
-  // Commit-coverage module: headline-word matching + scaled threshold.
+// Commit coverage: word-match semantics + the scaled threshold curve.
+function testCommitCoverage(): void {
   const msgList = ["fix(auth): refresh token race", "docs: update readme", "chore: bump deps"];
   expectMatch(
     "headline word matches count coverage",
@@ -135,13 +140,20 @@ async function main(): Promise<void> {
   expectMatch("threshold: 122 commits declines to the 60% floor", coverageThreshold(122), 0.6);
   expectMatch("threshold: 80 commits is 0.6 via linear decline", coverageThreshold(80), 0.6);
   expectMatch("threshold: 50 commits is 0.75 (mid-range)", coverageThreshold(50), 0.9 - 30 * 0.005);
+}
+
+async function main(): Promise<void> {
+  await testAnchorGating();
+  await testProportionalSize();
+  await testSmallDiffLeniency();
+  testCommitCoverage();
 
   const failures = getFailures();
   if (failures > 0) {
     console.log(`\n❌ ${String(failures)} check(s) FAILED`);
     process.exit(1);
   }
-  console.log("\n✅ All refinement scoring tests passed");
+  console.log("\n✅ All refinement testing passed");
 }
 
 await main();

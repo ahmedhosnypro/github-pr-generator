@@ -25,11 +25,22 @@ function changeIndicator(type: FileChangeType): string {
   return "[m]";
 }
 
+// Cap the commits list: a release PR can carry hundreds of commits, and past
+// this point the prompt gains nothing from more bullets while the coverage
+// mandate becomes unreachable. The remainder is folded into a note for
+// thematic coverage.
+const MAX_LISTED_COMMITS = 150;
+
 function buildCommitsSection(commits: CommitInfo[] | undefined): string {
   let section = "## Commits\n\n";
   if (commits && commits.length > 0) {
-    for (const commit of commits) {
+    const listed = commits.slice(0, MAX_LISTED_COMMITS);
+    for (const commit of listed) {
       section += "- " + commit.message + "\n";
+    }
+    if (commits.length > listed.length) {
+      const rest = commits.length - listed.length;
+      section += `(+${String(rest)} more commits, not listed — cover them thematically rather than itemizing)\n`;
     }
   } else {
     section += "(No commit information available)\n";

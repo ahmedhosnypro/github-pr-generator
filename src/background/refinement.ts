@@ -9,7 +9,7 @@ const REFINEMENT_PROMPT = (
 
 TASK: Improve the given PR description to maximize readability and render quality. You MUST fix ALL issues found in the analysis.
 
-QUALITY REQUIREMENTS (10-point rubric - fix every failure):
+QUALITY REQUIREMENTS (12-point rubric - fix every failure):
 1. **Opener is a thesis** - First line after "## Summary" must be a clear thesis, NOT a restatement of the title. Wrap at sentence boundaries.
 2. **Summary prose ≤4 sentences** - No bullets in Summary; max 4 sentences total. Each sentence on its own line.
 3. **Changes grouped with bold-label bullets** - Each bullet: \`- **Bold label** — one concrete statement ≤25 words\`. Keep bullets in groups ≤200 words maximum.

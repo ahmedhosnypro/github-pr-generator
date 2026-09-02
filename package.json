@@ -31,13 +31,14 @@
     "test:stream": "bun run tests/stream-parse.ts",
     "test:pr-creation": "bun run tests/pr-creation-prompt.ts",
     "test:style": "bun run tests/repo-style.ts",
-    "test": "bun run test:logic && bun run test:parse && bun run test:format && bun run test:stream && bun run test:style && bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation && bun run test:refinement && bun run test:diff-parse && bun run test:config-save && bun run test:llm && bun run test:sse && bun run test:stream-render",
+    "test": "bun run test:logic && bun run test:parse && bun run test:format && bun run test:stream && bun run test:style && bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation && bun run test:refinement && bun run test:diff-parse && bun run test:config-save && bun run test:llm && bun run test:sse && bun run test:stream-render && bun run test:rubric",
     "test:refinement": "bun run tests/refinement.ts",
     "test:diff-parse": "bun run tests/diff-parse.ts",
     "test:config-save": "bun run tests/config-save.ts",
     "test:llm": "bun run tests/llm.ts",
     "test:sse": "bun run tests/sse.ts",
     "test:stream-render": "bun run tests/stream-render.ts",
+    "test:rubric": "bun run tests/rubric.ts",
     "test:e2e": "bun run tests/extension-e2e.ts"
   },
   "devDependencies": {

@@ -34,6 +34,8 @@ async function main(): Promise<void> {
     expectMatch("popup: endpoint field present", true, true);
     expectMatch("popup: save button present", hasSave, true);
     expectMatch("popup: test-api button present", hasTestApi, true);
+    // Save a screenshot of the rendered popup for human review
+    await popup.screenshot({ path: "scratch/screenshots/e2e-popup.png" });
     await popup.close();
 
     // Content script on a real opened-PR page: both AI buttons appear.
@@ -44,6 +46,11 @@ async function main(): Promise<void> {
     const descBtn = await page.locator("#ai-pr-generate-btn-opened-desc").count();
     expectMatch("opened PR: title button injected", titleBtn > 0, true);
     expectMatch("opened PR: desc button injected", descBtn > 0, true);
+
+    // Save screenshots to scratch/screenshots/ for human review (STYLING
+    // BETTER SHOWN THAN PROBED). Never ReadMediaFile in the main context loop.
+    await page.evaluate(() => document.getElementById("ai-pr-generate-btn-opened-title")?.scrollIntoView());
+    await page.screenshot({ path: "scratch/screenshots/e2e-opened-pr-buttons.png", fullPage: false });
 
     // Run 9 regression: the title split-button must NOT be inside
     // span.markdown-title — its textContent feeds the "improve title" prompt.
