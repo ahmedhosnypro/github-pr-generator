@@ -18,6 +18,7 @@ import {
   validateEndpointBtn,
 } from "./elements";
 import { loadSettings } from "./load";
+import { requestEndpointPermission } from "./permissions";
 import { persistField, saveSettings } from "./save";
 import { testApi } from "./test-api";
 import { testGitHub } from "./test-github";
@@ -28,7 +29,24 @@ import {
   toThinkingEffort,
   updateDiffConditionalVisibility,
 } from "./ui";
-import { resetEndpointFieldError, validateEndpoint, validateEndpointDebounced } from "./validate";
+import {
+  resetEndpointFieldError,
+  showEndpointPermissionError,
+  validateEndpoint,
+  validateEndpointDebounced,
+} from "./validate";
+
+async function validateWithPermission(): Promise<void> {
+  const granted = await requestEndpointPermission(endpointInput.value.trim());
+  if (granted) validateEndpoint();
+  else showEndpointPermissionError();
+}
+
+async function testApiWithPermission(): Promise<void> {
+  const granted = await requestEndpointPermission(endpointInput.value.trim());
+  if (granted) testApi();
+  else showEndpointPermissionError();
+}
 
 function wireAutosaveField(key: keyof SaveConfigData, el: HTMLInputElement): void {
   el.addEventListener("input", () => {
@@ -72,7 +90,11 @@ function wireThinkingEffortGroup(): void {
 
 function wireButtons(): void {
   saveBtn.addEventListener("click", saveSettings);
-  validateEndpointBtn.addEventListener("click", validateEndpoint);
+  // Clicks are user gestures: request the host permission for a custom endpoint
+  // before it is tested (without it, the service worker's fetch is blocked).
+  validateEndpointBtn.addEventListener("click", () => {
+    void validateWithPermission();
+  });
   toggleApiKeyBtn.addEventListener("click", () => {
     togglePasswordVisibility(apiKeyInput, toggleApiKeyBtn);
   });
@@ -81,7 +103,9 @@ function wireButtons(): void {
   });
   diffEnabledInput.addEventListener("change", updateDiffConditionalVisibility);
   wireDiffSettingsToggle();
-  testApiBtn.addEventListener("click", testApi);
+  testApiBtn.addEventListener("click", () => {
+    void testApiWithPermission();
+  });
   testGitHubBtn.addEventListener("click", testGitHub);
   themeToggle.addEventListener("click", toggleTheme);
   endpointInput.addEventListener("blur", validateEndpointDebounced);

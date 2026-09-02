@@ -5,6 +5,7 @@
   "description": "Generate GitHub PR title and description using an OpenAI-compatible API",
   "permissions": ["storage", "activeTab"],
   "host_permissions": ["https://github.com/*", "https://api.github.com/*", "http://localhost:20128/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
   },

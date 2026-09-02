@@ -8,6 +8,7 @@ function getProp(obj: unknown, key: string): unknown {
   return value;
 }
 
+// Parse embedded commits from JSON. Avoid parsing large payloads by streaming/chunking if possible.
 function parseEmbeddedCommits(jsonText: string): CommitInfo[] | null {
   const data: unknown = JSON.parse(jsonText);
   const props = getProp(data, "props");
@@ -19,7 +20,8 @@ function parseEmbeddedCommits(jsonText: string): CommitInfo[] | null {
   const result: CommitInfo[] = [];
   for (const raw of commits) {
     const message = getProp(raw, "message");
-    if (typeof message !== "string") return null;
+    // A single malformed entry must not discard the whole embedded commit list.
+    if (typeof message !== "string") continue;
     result.push({ message });
   }
   log("info", "Extracted " + String(commits.length) + " commits from embedded JSON");
@@ -95,11 +97,8 @@ export function extractStats(): PRStats | null {
   const text = statsEl.textContent;
   return {
     // Regexes kept verbatim from the original content script — rewrite risks changing matched output
-    // eslint-disable-next-line sonarjs/super-linear-regex
     files: matchCount(/(\d[\d,]*)\s+changed\s+file/i, text),
-    // eslint-disable-next-line sonarjs/super-linear-regex
     additions: matchCount(/([\d,]+)\s+addition/i, text),
-    // eslint-disable-next-line sonarjs/super-linear-regex
     deletions: matchCount(/([\d,]+)\s+deletion/i, text),
   };
 }

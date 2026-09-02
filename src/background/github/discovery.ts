@@ -20,7 +20,10 @@ const MAX_SAMPLE_BODY_CHARS = 1500;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const CACHE_PREFIX = "repoStyle:";
 
-const BOT_LOGIN = /(?:\[bot\]$|bot$)/i;
+// Bot logins in the GitHub API always carry the "[bot]" suffix (e.g.
+// "dependabot[bot]"); a plain suffix match would also exclude humans like
+// "robot".
+const BOT_LOGIN = /\[bot\]$/i;
 
 async function readCache(key: string): Promise<RepoStyle | null> {
   try {

@@ -73,7 +73,9 @@ function copyLogsToClipboard(body: Element): void {
   const onCopied = (): void => {
     log("info", "Logs copied to clipboard!");
   };
-  void navigator.clipboard.writeText(text).then(onCopied);
+  void navigator.clipboard.writeText(text).then(onCopied, () => {
+    log("warn", "Clipboard copy failed (permission denied or no focus)");
+  });
 }
 
 function loadSavedLogs(bodyEl: Element): void {

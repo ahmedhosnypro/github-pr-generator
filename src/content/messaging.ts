@@ -50,22 +50,23 @@ function attemptSend<R>(call: PendingCall<R>, remaining: number): void {
 }
 
 function handleSendError<R>(call: PendingCall<R>, remaining: number, err: unknown): void {
-  clearPing(call);
   if (call.done) return;
   const msgText = errorMessage(err);
   if (/Receiving end does not exist|message channel closed/i.test(msgText) && remaining > 0) {
     log("warn", "sendToBackground threw (" + msgText + "); retrying once");
+    // Keep the keepalive running across the retry — the retried call is the
+    // long one that most needs SW idle protection.
     setTimeout(() => {
       attemptSend(call, remaining - 1);
     }, 250);
     return;
   }
+  clearPing(call);
   call.done = true;
   call.reject(err instanceof Error ? err : new Error(msgText));
 }
 
 function handleResponse<R>(call: PendingCall<R>, remaining: number, resp: unknown): void {
-  clearPing(call);
   if (call.done) return;
   const err = chrome.runtime.lastError;
   const errMsg = err?.message ?? "";
@@ -74,17 +75,20 @@ function handleResponse<R>(call: PendingCall<R>, remaining: number, resp: unknow
   // { error: ... } (background rejected). Distinguish by checking resp: if we have
   // an object, the messaging succeeded and lastError is just informational.
   if (resp !== undefined && resp !== null) {
+    clearPing(call);
     call.done = true;
     call.resolve(resp as R | MessageErrorResponse);
     return;
   }
   if (channelClosed && remaining > 0) {
     log("warn", "sendToBackground channel closed; retrying once (" + call.message.type + ")");
+    // Keep the keepalive running across the retry (see handleSendError).
     setTimeout(() => {
       attemptSend(call, remaining - 1);
     }, 250);
     return;
   }
+  clearPing(call);
   call.done = true;
   call.reject(err ? new Error(errMsg) : new Error("No response from background"));
 }

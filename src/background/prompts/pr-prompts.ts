@@ -3,6 +3,8 @@ import {
   ANCHOR_RULE,
   BREAKING_CHANGES_RULE,
   buildExistingContentSection,
+  buildScreenshotsHint,
+  buildSizeTierNote,
   buildTemplateFillBlock,
   FORMATTING_RULES,
   INTENT_TITLES_RULE,
@@ -73,6 +75,9 @@ export function buildDescriptionOnlyPrompt(
   if (style) {
     prompt += buildHouseStyleNote(style);
   }
+
+  prompt += buildScreenshotsHint(changesSummary);
+  prompt += buildSizeTierNote(changesSummary);
 
   prompt += "OUTPUT FORMAT:\n";
   prompt += "Output ONLY the PR description body as structured markdown. Do NOT include a title line.\n\n";

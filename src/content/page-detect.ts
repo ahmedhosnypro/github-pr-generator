@@ -48,7 +48,7 @@ export function isMergeConfirmationPage(): boolean {
     document.querySelector('input[data-component="input"][type="text"][value*="Merge pull request"]'),
   );
   const hasMergeTextarea = Boolean(
-    document.querySelector('.prc-Textarea-TextArea-snlco, textarea[placeholder*="extended description"]'),
+    document.querySelector('textarea[class*="prc-Textarea-TextArea"], textarea[placeholder*="extended description"]'),
   );
   const result = hasConfirmMerge || (hasMergeInput && hasMergeTextarea);
   log(

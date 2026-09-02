@@ -1,3 +1,8 @@
+import {
+  commitHeadlineWords,
+  countCoveredCommits as countCoveredCommitsImpl,
+  commitHeadline as getCommitHeadlineImpl,
+} from "../src/background/commit-coverage";
 import type { FileChange, GhPrDetails, TestPrRef } from "./shared";
 import { fetchPRDetails, loadConfig, runGhCommand } from "./shared";
 
@@ -20,18 +25,12 @@ export interface TestContext {
   githubToken: string;
 }
 
-function headlineWords(commit: string): string[] {
-  const headline = (commit.split("\n")[0] ?? "").toLowerCase();
-  return headline.split(/\s+/).filter((w) => w.length > 3);
-}
-
 export function getCommitHeadline(commit: string): string {
-  return (commit.split("\n")[0] ?? "").toLowerCase();
+  return getCommitHeadlineImpl(commit);
 }
 
 export function countCoveredCommits(commits: string[], text: string): number {
-  const lowered = text.toLowerCase();
-  return commits.filter((commit) => headlineWords(commit).some((w) => lowered.includes(w))).length;
+  return countCoveredCommitsImpl(commits, text);
 }
 
 export function computeCoverageDetails(
@@ -41,7 +40,7 @@ export function computeCoverageDetails(
   const lowered = text.toLowerCase();
   const details = commits.map((commit, i) => {
     const headline = getCommitHeadline(commit);
-    const covered = headlineWords(commit).some((w) => lowered.includes(w));
+    const covered = commitHeadlineWords(commit).some((w) => lowered.includes(w));
     return { commit: i + 1, headline, covered };
   });
   return { covered: details.filter((d) => d.covered).length, details };

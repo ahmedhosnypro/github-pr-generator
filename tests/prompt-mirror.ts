@@ -3,12 +3,19 @@
 // tests/prompt-logic.ts fails when this mirror drifts from src.
 // isLikelyTemplate is logic, not wording, so it is imported from src directly
 // (as tests/prompt-logic.ts already does) rather than mirrored.
-import { FORMATTING_RULES, isLikelyTemplate } from "../src/background/prompts/common";
+import {
+  buildScreenshotsHint,
+  buildSizeTierNote,
+  FORMATTING_RULES,
+  isLikelyTemplate,
+} from "../src/background/prompts/common";
 
 const SECTIONS_LINES = [
   "Use these sections, scaled to the change: omit sections that would be empty, and for small diffs (a handful of files or ~50 changed lines) prefer a compact output — Summary plus Testing when verifiable, with commits folded into Summary — over a long scaffold. Commit Coverage remains mandatory in all sizes, even if rendered as one sentence.\n\n",
   "## Summary\n",
   "2-4 sentences, no bullets. For bug fixes, open with the root cause in one line — the observable symptom, then the mechanism that caused it — before describing the fix; for features or chores, state what the PR does and why it's needed. The first sentence must add information beyond the title — never restate it. Reference concrete identifiers from the diff, not generic descriptions. Large diffs may add one bolded scale line (e.g. **61 files, +1,669/−1,281**).\n\n",
+  "(Conditional) ## Problem\n",
+  "For bug fixes or behavioral changes whose failure mode is identifiable from the diff, insert this short section between Summary and Changes: the symptom, the mechanism that caused it, and where it manifests in the diff (one short paragraph or up to 3 bullets). Skip it for features, chores, and fixes whose cause would be guesswork.\n\n",
   "## Changes\n",
   "Group by area under ### subsections (skip subsections when only a few files changed). Every bullet is one line: `- **Bold label** — one concrete statement of at most ~25 words`, identifiers and paths in backticks, exactly one idea per bullet. Every file you name carries a diff hunk link from the Anchors section: [[N]](diffhunk://ANCHOR_Lstart-Rend). With 2+ comparable numeric results (before/after, per-suite, per-platform), use a markdown table with a one-line bold verdict caption instead of bullets.\n\n",
   "## Walkthrough\n",
@@ -70,6 +77,9 @@ export function buildCombinedPrompt(changesSummary: string, existingBody: string
   if (existingBody.trim().length > 0) {
     prompt += existingContentSection(existingBody);
   }
+
+  prompt += buildScreenshotsHint(changesSummary);
+  prompt += buildSizeTierNote(changesSummary);
 
   prompt += "OUTPUT FORMAT:\n";
   prompt += "1. First line: PR title only. " + TITLE_STYLE_GUIDANCE + ". Under 72 characters.\n";

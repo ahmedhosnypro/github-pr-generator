@@ -61,7 +61,13 @@ function resolveNumberLimit(
   fallback: number,
 ): number {
   if (fileValue !== undefined) return fileValue;
-  if (storedValue !== undefined) return Number.parseInt(String(storedValue), 10);
+  if (storedValue !== undefined) {
+    // Clearing the popup field stores "", which parses to NaN; a NaN limit would
+    // silently disable diff truncation (every comparison against NaN is false).
+    const parsed = Number.parseInt(String(storedValue), 10);
+    if (Number.isNaN(parsed)) return fallback;
+    return parsed;
+  }
   return fallback;
 }
 

@@ -94,9 +94,27 @@ async function requestCompareDiff(
   }
 }
 
+async function requestPrDiff(
+  config: ExtensionConfig,
+  owner: string,
+  repo: string,
+  prNumber: string,
+): Promise<GitHubDiffResult> {
+  const url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
+  logMsg("Fetching fallback diff from: " + url);
+  try {
+    const response = await fetch(url, { method: "GET", headers: buildDiffHeaders(config) });
+    return await processDiffResponse(config, response);
+  } catch (fetchErr) {
+    logMsg("GitHub API fetch error (pull diff): " + errorMessage(fetchErr));
+    return { error: "GITHUB_NETWORK_ERROR", message: errorMessage(fetchErr) };
+  }
+}
+
 export async function fetchGitHubDiff(
   config: ExtensionConfig,
   branchContext: Partial<BranchContext> | null,
+  prNumber?: string,
 ): Promise<GitHubDiffResult> {
   if (!config.diffEnabled) {
     logMsg("Diff fetching disabled by config");
@@ -112,11 +130,19 @@ export async function fetchGitHubDiff(
     return { error: "GITHUB_INVALID_CONTEXT" };
   }
 
-  return requestCompareDiff(
+  const compareResult = await requestCompareDiff(
     config,
     branchContext.owner,
     branchContext.repo,
     branchContext.baseBranch,
     branchContext.headBranch,
   );
+
+  // A 404 on compare usually means the head branch was deleted after merge.
+  // The /pulls/{n} diff endpoint survives that — use it when we know the PR.
+  if (compareResult !== null && "error" in compareResult && compareResult.error === "GITHUB_404" && prNumber) {
+    logMsg("Compare diff 404 (branch likely deleted post-merge) — falling back to PR diff endpoint");
+    return await requestPrDiff(config, branchContext.owner, branchContext.repo, prNumber);
+  }
+  return compareResult;
 }

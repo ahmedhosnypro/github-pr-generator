@@ -1,4 +1,5 @@
 import { apiEndpointError, apiKeyInput, connectionStatus, connectionStatusText, endpointInput } from "./elements";
+import { hasEndpointPermission } from "./permissions";
 import { stripTrailingSlashes } from "./text";
 
 const ERROR_CLASS = "md-text-field__input--error";
@@ -38,12 +39,21 @@ function handleValidateResponse(response: Response): void {
   }
 }
 
-function handleValidateError(err: unknown): void {
-  if (err instanceof TypeError && err.message.includes("CORS")) {
-    clearEndpointError("connected", "Connected (CORS limited)");
-  } else {
-    showEndpointError("Connection failed", "Could not connect to endpoint");
+/** Shown when the extension lacks host permission for the configured endpoint. */
+export function showEndpointPermissionError(): void {
+  showEndpointError("Permission needed", "Click Validate again and allow access to this host");
+}
+
+async function handleValidateError(err: unknown): Promise<void> {
+  // A fetch TypeError here is almost always the MV3 host-permission block on
+  // non-declared origins (Chrome says "Failed to fetch", never "CORS"), so
+  // probe the permission state instead of guessing from the message.
+  const has = await hasEndpointPermission(endpointInput.value);
+  if (!has) {
+    showEndpointPermissionError();
+    return;
   }
+  showEndpointError("Connection failed", "Could not connect to endpoint. Original error: " + String(err));
 }
 
 export function validateEndpoint(): void {

@@ -9,6 +9,7 @@ const CORPUS_WORDING_ASSERTIONS: [string, string, boolean][] = [
   ["A7", "Do NOT imitate bot output", true],
   ["A2", "root cause in one line", true],
   ["A3 (section removed)", "## Breaking Changes\nAny", false],
+  ["A9 (gated Problem section)", "(Conditional) ## Problem", true],
 ];
 
 function evaluatePrompt(commits: string[], prompt: string, coveredInSummary: number): CoverageResult {

@@ -19,7 +19,9 @@ export function persistField(key: keyof SaveConfigData, value: string | boolean)
   // Strings still get trimmed; booleans now persist as-is.
   const normalized = typeof value === "string" ? value.trim() : value;
   const partial = { [key]: normalized } as unknown as SaveConfigData;
-  void sendToBackground<SaveConfigResponse>("saveConfig", partial);
+  void sendToBackground<SaveConfigResponse>("saveConfig", partial).catch(() => {
+    // SW unreachable even after retry — storageSetFallback below still persists.
+  });
   storageSetFallback(partial);
   updateLastSaved();
 }
@@ -39,9 +41,15 @@ export function saveSettings(): void {
     diffMaxBytes: Number.parseInt(diffMaxBytesInput.value, 10) || 100000,
   };
   void sendToBackground<SaveConfigResponse>("saveConfig", data).then((resp) => {
-    console.log("[PR Generator popup] saveSettings via SW:", resp);
-    if (!resp.ok) storageSetFallback(data);
-    showToast("Settings saved!");
+    console.log("[PR Generator popup] saveSettings via SW:", { ok: resp.ok });
+    if (!resp.ok) {
+      storageSetFallback(data);
+      // The fallback write is silent; tell the user the primary save failed
+      // and that settings were only stored locally for this browser.
+      showToast("Background save failed — stored locally", "error");
+    } else {
+      showToast("Settings saved!");
+    }
     updateLastSaved();
     return resp;
   });

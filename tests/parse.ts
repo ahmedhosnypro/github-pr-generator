@@ -95,11 +95,25 @@ function testBoldWrappedTitle(): void {
   );
 }
 
+function testContentAfterBotBlockSurvives(): void {
+  const input = "## Summary by CodeRabbit\n- bot bullets\n- more fill\n\n## Changes\nReal authored content follows.";
+  const out = parseDescriptionOnlyResponse(input);
+  expectIncludes("content after bot block survives", out, "Real authored content follows.");
+  expectExcludes("bot heading removed", out, "CodeRabbit");
+  expectExcludes("bot section bullets swallowed", out, "bot bullets");
+  const suffix = "## Summary\nReal fix.\n\n## Summary by cubic\n- bot bullets\n\n## Testing\nRun the tests.";
+  const outSuffix = parseDescriptionOnlyResponse(suffix);
+  expectIncludes("content before bot block kept", outSuffix, "Real fix.");
+  expectIncludes("content after bot block kept", outSuffix, "Run the tests.");
+  expectExcludes("mid-document bot section removed", outSuffix, "bot bullets");
+}
+
 console.log("=== Parse / Bot-Signature Stripping Tests ===\n");
 testCodeRabbitBlock();
 testCubicAndMarkers();
 testTemplatePreservation();
 testTemplateWithBotAppendix();
+testContentAfterBotBlockSurvives();
 testRubberStampChecklist();
 testCombinedParse();
 testCopilotTrailers();

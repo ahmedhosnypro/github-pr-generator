@@ -1,6 +1,7 @@
 import { stripBotArtifacts } from "../src/background/bot-artifacts";
 import { buildCombinedPrompt as buildSrcCombinedPrompt } from "../src/background/prompts/combined";
 import { isLikelyTemplate } from "../src/background/prompts/common";
+import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../src/background/prompts/merge-prompts";
 import { buildDescriptionOnlyPrompt, buildTitleOnlyPrompt } from "../src/background/prompts/pr-prompts";
 import { buildHouseStyleNote, type RepoStyle } from "../src/background/repo-style";
 import { expectExcludes, expectIncludes, expectMatch, getFailures } from "./expect-helpers";
@@ -15,6 +16,7 @@ const COLON_PREFIX_STYLE: RepoStyle = {
   exampleTitles: ["zlib: avoid waiting for paused ZIP iterators", "sessions: Show chat status on its own row"],
   length: "S",
   templateHeavy: true,
+  aiDisclosure: false,
 };
 
 const TEMPLATE_STYLE: RepoStyle = {
@@ -23,6 +25,7 @@ const TEMPLATE_STYLE: RepoStyle = {
   exampleTitles: [],
   length: null,
   templateHeavy: true,
+  aiDisclosure: false,
 };
 
 function bodyKind(body: string): string {
@@ -105,6 +108,7 @@ function testRepoStyleNotes(): void {
     exampleTitles: [],
     length: null,
     templateHeavy: false,
+    aiDisclosure: false,
   });
   expectMatch("empty style gives no note", empty, "");
   const prompt = buildSrcCombinedPrompt("SUMMARY\n", "", COLON_PREFIX_STYLE);
@@ -134,6 +138,64 @@ function testBotStrippingSmoke(): void {
   expectMatch("kubernetes template survives stripping", stripBotArtifacts(K8S_TEMPLATE), K8S_TEMPLATE);
 }
 
+function testScreenshotsHint(): void {
+  const uiSummary = "## Changed Files\n\n- M popup/popup.css (+3/-1)\n- A src/popup/panel.tsx (+40/-0)\n";
+  expectIncludes(
+    "UI-dominated combined prompt gets hint",
+    buildSrcCombinedPrompt(uiSummary, ""),
+    "## Screenshots Hint",
+  );
+  expectIncludes(
+    "hint forbids fabricated screenshots",
+    buildSrcCombinedPrompt(uiSummary, ""),
+    "Never fabricate screenshots",
+  );
+  expectIncludes(
+    "description-only prompt gets hint",
+    buildDescriptionOnlyPrompt(uiSummary, "", ""),
+    "## Screenshots Hint",
+  );
+  const codeSummary = "## Changed Files\n\n- M src/background/parse.ts (+3/-1)\n- M src/types.ts (+1/-0)\n";
+  expectExcludes("code-only prompt gets no hint", buildSrcCombinedPrompt(codeSummary, ""), "## Screenshots Hint");
+  expectExcludes(
+    "summary without file section gets no hint",
+    buildSrcCombinedPrompt("SUMMARY\n", ""),
+    "## Screenshots Hint",
+  );
+  expectExcludes("title-only prompt never gets hint", buildTitleOnlyPrompt(uiSummary, ""), "## Screenshots Hint");
+}
+
+function testSizeTierNote(): void {
+  const small = "## Stats\n\n- 2 changed files\n- 10 additions\n- 5 deletions\n";
+  expectIncludes("small diff gets compact directive", buildSrcCombinedPrompt(small, ""), "## Size Tier — Small Change");
+  const large = "## Stats\n\n- 40 changed files\n- 800 additions\n- 300 deletions\n";
+  expectIncludes(
+    "large diff gets full-skeleton note",
+    buildSrcCombinedPrompt(large, ""),
+    "## Size Tier — Large Change",
+  );
+  const mid = "## Stats\n\n- 10 changed files\n- 100 additions\n- 50 deletions\n";
+  expectExcludes("mid-range diff gets no tier note", buildSrcCombinedPrompt(mid, ""), "## Size Tier —");
+  expectExcludes("stats-less summary gets no note", buildSrcCombinedPrompt("SUMMARY\n", ""), "## Size Tier —");
+  expectExcludes("title-only prompt never gets tier note", buildTitleOnlyPrompt(small, ""), "## Size Tier —");
+}
+
+function testMergePrompts(): void {
+  const title = buildMergeTitlePrompt("SUMMARY\n", "fix: the old title", "old merge title");
+  expectIncludes(
+    "merge title includes existing merge title",
+    title,
+    'The current merge commit title is: "old merge title"',
+  );
+  expectIncludes("merge title cites PR title as reference", title, 'The pull request title is: "fix: the old title"');
+  expectIncludes("merge title shares title-style guidance", title, "Match the repo's title style");
+  expectIncludes("merge title includes intent rule", title, "intent of the change");
+  const desc = buildMergeDescriptionPrompt("SUMMARY\n", "fix: x", "PR body text", "merge t", "merge d");
+  expectIncludes("merge desc includes existing merge desc", desc, "merge d");
+  expectExcludes("merge desc omits title line instruction", desc, "## Existing Merge Commit Title\nThe current");
+  expectIncludes("merge desc tells model not to use diffhunk links", desc, "Do NOT include diff hunk references");
+}
+
 console.log("=== Prompt & Logic Unit Tests ===\n");
 testMirrorDrift();
 testTemplateDetection();
@@ -143,6 +205,9 @@ testTitleAndDescriptionPrompts();
 testRepoStyleNotes();
 testDiscoveredTemplateInjection();
 testBotStrippingSmoke();
+testScreenshotsHint();
+testSizeTierNote();
+testMergePrompts();
 
 const failures = getFailures();
 if (failures > 0) {

@@ -90,6 +90,7 @@ export async function fetchPrDiffText(
   repo: string,
   base: string,
   head: string,
+  prNumber?: number,
 ): Promise<string | null> {
   const url =
     "https://api.github.com/repos/" +
@@ -103,8 +104,22 @@ export async function fetchPrDiffText(
   const response = await fetch(url, {
     headers: headers(config.githubToken, "application/vnd.github.v3.diff"),
   });
-  if (!response.ok) return null;
-  return response.text();
+  if (response.ok) return response.text();
+
+  // Compare 404s when the head branch was deleted after merge — the PR diff
+  // endpoint survives that (it indexes by PR number, not branch).
+  if (prNumber !== undefined) {
+    const fallback = await fetch("https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + String(prNumber), {
+      headers: headers(config.githubToken, "application/vnd.github.v3.diff"),
+    });
+    if (fallback.ok) return fallback.text();
+    if (fallback.status === 406) {
+      console.warn(`Diff endpoint reports the PR is too large (>300 files, HTTP 406) — no diff available for prompt`);
+      return null;
+    }
+    console.warn(`PR diff fallback failed: ${String(fallback.status)}`);
+  }
+  return null;
 }
 
 export function prApiBase(owner: string, repo: string, prNumber: number): string {

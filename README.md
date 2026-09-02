@@ -229,39 +229,46 @@ Add a `testPr` section to your `config.local.json`:
 
 ### Running Tests
 
+The full offline suite (`bun run test`) chains nine suites: **logic** (prompt wording, mirror drift), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **coverage**/**extension**/**full** (fetch-based, use the `testPr` fixture), **pr-creation** (prompt assembly), **refinement** (quality-loop scorer), **diff-parse** (hunk extraction).
+
 ```bash
-# Run commit coverage test (checks if PR description covers all commits)
-bun run test:coverage
-
-# Run extension prompt coverage test (checks if extension's changes summary includes all commits)
-bun run test:extension
-
-# Run full extension coverage test (checks prompt structure and PR description coverage)
-bun run test:full
-
-# Run PR creation page prompt test (checks prompt includes commit coverage instruction)
-bun run test:pr-creation
-
-# Run offline unit tests (no GitHub/LLM access needed):
-# prompt logic, mirror-vs-src drift, template detection, style-note injection
-bun run test:logic
-
-# bot-signature stripping and template preservation tests
-bun run test:parse
-
-# render-quality contract assertions (fences, tables, bullet caps, anchor rules)
-bun run test:format
-
-# LIVE render-quality acceptance — calls the configured local LLM and checks
-# the generated description for fences, anchors, numbered steps, line lengths
-# (not part of `bun run test`; requires the API endpoint to be running)
-bun run test:format-live
-
-# repo-style inference tests (title conventions, length buckets, template detection)
-bun run test:style
-
-# Run all tests
+# Run all offline tests
 bun run test
+
+# Individually:
+bun run test:logic         # prompt wording & drift guard
+bun run test:parse         # bot stripping / template fidelity
+bun run test:format        # render-quality rules
+bun run test:stream        # SSE chunk parsing
+bun run test:style         # repo-style inference
+bun run test:coverage      # PR description covers commits (uses testPr)
+bun run test:extension     # prompt covers commits (uses testPr)
+bun run test:full          # both + PR structure (uses testPr)
+bun run test:pr-creation   # creation-page prompt assertions
+bun run test:refinement    # quality loop scorer (anchors, size, coverage)
+bun run test:diff-parse    # diff → hunk-range extraction
+```
+
+### Live labs (hit the real LLM endpoint — not part of `bun run test`)
+
+```bash
+# Single PR end-to-end: fetch a real PR, generate, refine, score
+bun run lab                    # sirajLMS/siraj#119 by default; override with --repo o/r --pr N
+
+# All top-10 active GitHub repos in parallel, one merged PR each, summary table
+bun run lab:parallel
+
+# Render-quality acceptance against a hand-built fixture
+bun run test:format-live
+```
+
+### Browser E2E (real Chromium, not in `bun run test`)
+
+```bash
+bun run test:e2e   # loads dist/ as an unpacked extension: service worker registers,
+                   # popup renders + saves/restores settings, buttons inject on a
+                   # live opened-PR page, and the run 9 title-corruption regression
+                   # is asserted against the real GitHub DOM
 ```
 
 ### Test Output
@@ -321,14 +328,21 @@ github-pr-generator/
 ├── scripts/
 │   ├── build.ts                   # bun build → dist/ + asset copy
 │   └── convert-icons.ts           # PNG icon generation from SVG (sharp)
-├── tests/                         # bun-run TypeScript test scripts
-│   ├── commit-coverage.ts
-│   ├── extension-coverage.ts
-│   ├── full-coverage.ts
-│   ├── pr-creation-prompt.ts
-│   ├── prompt-logic.ts            # offline unit tests (prompt wording, mirror drift, style injection)
-│   ├── repo-style.ts              # repo-style inference tests (titles, length, template detection)
-│   └── parse.ts                   # bot-signature stripping / template preservation tests
+├── tests/                         # bun-run TypeScript tests + live labs
+│   ├── prompt-logic.ts            # offline prompt unit tests (wording, drift guard, style notes)
+│   ├── parse.ts                   # bot-signature stripping / template preservation
+│   ├── prompt-format.ts           # render-quality contract assertions
+│   ├── stream-parse.ts            # SSE chunk parsing
+│   ├── repo-style.ts              # repo-style inference tests
+│   ├── refinement.ts              # refinement-loop scorer unit tests
+│   ├── diff-parse.ts              # diff → hunk-range extraction tests
+│   ├── commit-coverage.ts         # PR-description commit coverage (uses testPr fixture)
+│   ├── extension-coverage.ts      # prompt-side commit coverage (uses testPr fixture)
+│   ├── full-coverage.ts           # both coverage angles + structure
+│   ├── pr-creation-prompt.ts      # creation-page prompt assertions
+│   ├── extension-e2e.ts           # real Chromium: popup + content-script smoke
+│   ├── pr-lab.ts                  # single-PR live generate/refine/score lab
+│   └── pr-lab-parallel.ts         # all top-10 active repos in parallel
 ├── config.local.json              # Your API config (gitignored, copied to dist/ if present)
 ├── config.local.example.json      # Config template (tracked)
 ├── .gitignore
@@ -353,7 +367,9 @@ bun run check:unused     # knip unused code/exports/deps
 bun run quality          # lint + duplicates + unused
 ```
 
-Linting enforces, among other rules: `sonarjs/max-lines` 150 lines per file and `sonarjs/max-lines-per-function` 50 lines per function.
+Linting enforces, among other rules: `sonarjs/max-lines` 300 lines per file and `sonarjs/max-lines-per-function` 80 lines per function.
+
+`bun run quality-gate` runs the full check pipeline in stages (typecheck → oxlint → biome → eslint → unused → duplicates) and resumes from the first failing stage on rerun; `bun run quality-gate:fresh` starts clean.
 
 
 ---

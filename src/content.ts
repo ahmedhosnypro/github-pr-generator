@@ -25,9 +25,11 @@ function nodeHasMergeMarkers(el: Element): boolean {
   return (
     Boolean(el.querySelector('[class*="ConfirmMerge"]')) ||
     Boolean(el.querySelector('input[data-component="input"][type="text"]')) ||
-    Boolean(el.querySelector('.prc-Textarea-TextArea-snlco, textarea[placeholder*="extended description"]')) ||
+    Boolean(
+      el.querySelector('textarea[class*="prc-Textarea-TextArea"], textarea[placeholder*="extended description"]'),
+    ) ||
     el.matches('[class*="ConfirmMerge"]') ||
-    el.matches(".prc-Textarea-TextArea-snlco")
+    el.matches('[class*="prc-Textarea-TextArea"]')
   );
 }
 
@@ -63,17 +65,32 @@ let mergeCheckInterval: ReturnType<typeof setInterval> | null = null;
 function startMergeCheckInterval(): void {
   if (mergeCheckInterval) return;
   mergeCheckInterval = setInterval(() => {
-    if (isMergeConfirmationPage()) {
-      injectMergeButtons();
-      // Stop polling once merge buttons are injected
+    if (!isPROpenedPage() && !isMergeConfirmationPage()) {
+      // Navigated away from PR pages — polling is pointless.
       if (mergeCheckInterval) clearInterval(mergeCheckInterval);
       mergeCheckInterval = null;
+      return;
+    }
+    if (isMergeConfirmationPage()) {
+      // Keep polling: the dialog can close and reopen (its DOM, including our
+      // injected buttons, is recreated each time). injectMergeButtons is
+      // id-guarded, so repeat calls on the same dialog are no-ops.
+      injectMergeButtons();
     }
   }, 1000);
 }
 
 const turbListener = (): void => {
   setTimeout(() => {
+    // Turbo soft navigation can replace <body>; re-attach the observer to the
+    // new body (it silently dies otherwise), then re-run id-guarded injections.
+    observer.disconnect();
+    if (isPRCreationPage() || isPROpenedPage() || isMergeConfirmationPage()) {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    }
     if (isPRCreationPage()) {
       injectButtons();
     }

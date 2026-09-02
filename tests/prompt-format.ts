@@ -56,6 +56,7 @@ function testTemplateEtiquette(): void {
     exampleTitles: [],
     length: null,
     templateHeavy: true,
+    aiDisclosure: false,
   });
   expectIncludes("discovered template gets etiquette too", discovered, "Fill every placeholder");
   expectIncludes("extreme-value checkboxes survive echoed", discovered, "- [ ] Tests added");

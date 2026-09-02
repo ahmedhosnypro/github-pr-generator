@@ -53,10 +53,17 @@ export async function gatherPRData(
 
   const prCommits = await fetchPRCommits(config, owner, repo, prNumber);
   const commits = "commits" in prCommits ? prCommits.commits : [];
+  if ("error" in prCommits) {
+    // Never silently fall to zero — the prompt would generate without commits.
+    logMsg(origin + " - commits fetch failed (" + prCommits.error + "); generating without commit data");
+  }
   logMsg(origin + " - fetched " + String(commits.length) + " commits total");
 
   const prFiles = await fetchPRFiles(config, owner, repo, prNumber);
   const fileChanges = "files" in prFiles ? prFiles.files : [];
+  if ("error" in prFiles) {
+    logMsg(origin + " - files fetch failed (" + prFiles.error + "); generating without file list");
+  }
   logMsg(origin + " - fetched " + String(fileChanges.length) + " files total");
 
   const branchContext: BranchContext = {
@@ -66,7 +73,7 @@ export async function gatherPRData(
     headBranch: prDetails.headBranch,
   };
 
-  const diffResult = await fetchGitHubDiff(config, branchContext);
+  const diffResult = await fetchGitHubDiff(config, branchContext, prNumber);
   let diffText: string | null = null;
   let hunkRanges: GitHubHunksByFile | null = null;
   if (diffResult && "diff" in diffResult) {
@@ -82,7 +89,7 @@ const ISSUE_PATTERNS = [
   /#([1-9]\d{2,})/g,
 ];
 
-function extractLinkedIssues(commits: CommitInfo[]): string[] {
+export function extractLinkedIssues(commits: CommitInfo[]): string[] {
   const linkedIssues: string[] = [];
   for (const commit of commits) {
     for (const pattern of ISSUE_PATTERNS) {

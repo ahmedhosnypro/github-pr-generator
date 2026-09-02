@@ -3,6 +3,8 @@ import {
   ANCHOR_RULE,
   BREAKING_CHANGES_RULE,
   buildExistingContentSection,
+  buildScreenshotsHint,
+  buildSizeTierNote,
   buildTemplateFillBlock,
   FORMATTING_RULES,
   INTENT_TITLES_RULE,
@@ -27,6 +29,9 @@ export function buildCombinedPrompt(changesSummary: string, existingBody: string
   if (style) {
     prompt += buildHouseStyleNote(style);
   }
+
+  prompt += buildScreenshotsHint(changesSummary);
+  prompt += buildSizeTierNote(changesSummary);
 
   prompt += "OUTPUT FORMAT:\n";
   prompt += "1. First line: PR title only. " + TITLE_STYLE_GUIDANCE + ". Under 72 characters.\n";

@@ -1,5 +1,5 @@
 import type { PrSample } from "../src/background/repo-style";
-import { inferLength, inferRepoStyle, inferTitleStyle } from "../src/background/repo-style";
+import { buildHouseStyleNote, inferLength, inferRepoStyle, inferTitleStyle } from "../src/background/repo-style";
 import { expectMatch, getFailures } from "./expect-helpers";
 
 // Real merged titles from the analysis corpus (analysis/pull-requests/).
@@ -90,10 +90,27 @@ function testRepoStyleAggregation(): void {
   expectMatch("bots-less empty sample yields nulls", inferRepoStyle(null, []).titleStyle, null);
 }
 
+function testAiDisclosureDetection(): void {
+  const llamaTemplate = "## Checklist\n- [ ] I have disclosed any use of AI assistance in this PR\n- [ ] Tests pass\n";
+  expectMatch("AI checkbox sets aiDisclosure", inferRepoStyle(llamaTemplate, []).aiDisclosure, true);
+  const llmLine = "## Notes\n- This change was made with LLM assistance: <tool or none>\n";
+  expectMatch("LLM attestation line sets aiDisclosure", inferRepoStyle(llmLine, []).aiDisclosure, true);
+  const plain = "## Checklist\n- [ ] Tests pass\n- [ ] Docs updated\n";
+  expectMatch("plain checkbox template stays false", inferRepoStyle(plain, []).aiDisclosure, false);
+  expectMatch("no template means no disclosure", inferRepoStyle(null, []).aiDisclosure, false);
+  // Prose mention outside a checkbox/bullet is not a mandated disclosure.
+  const prose = "Consider: AI tools may help you write this description.\n## Other\nx\n";
+  expectMatch("prose AI mention not a mandate", inferRepoStyle(prose, []).aiDisclosure, false);
+  const note = buildHouseStyleNote(inferRepoStyle(llamaTemplate, []));
+  expectMatch("house-style note warns about disclosure", /AI-assistance disclosure/.test(note), true);
+  expectMatch("note forbids pre-checking the box", /never pre-check/i.test(note), true);
+}
+
 console.log("=== Repo Style Inference Tests ===\n");
 testTitleStyleInference();
 testLengthInference();
 testRepoStyleAggregation();
+testAiDisclosureDetection();
 
 const failures = getFailures();
 if (failures > 0) {

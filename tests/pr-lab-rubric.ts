@@ -1,8 +1,8 @@
 // Deterministic 10-point render-quality rubric for generated PR descriptions.
 // Each check maps to one failure class observed in the corpus study
 // (analysis/pull-requests/PRESENTATION.md) or the sirajLMS/siraj#119 incident.
+import { countCoveredCommits, coverageThreshold } from "../src/background/commit-coverage";
 import { countDiffAnchors } from "../src/background/parse";
-import { countCoveredCommits } from "./testkit";
 
 export interface RubricCheck {
   name: string;
@@ -63,23 +63,46 @@ function checkSummary(summary: string): RubricCheck {
   };
 }
 
-function checkChanges(changes: string): RubricCheck {
+function checkChanges(changes: string, opts: RubricOptions): RubricCheck {
+  const boldBullets = bulletLines(changes).filter((l) => l.includes("**")).length;
+  // Small diffs may fold changes into Summary entirely (per the compact directive).
+  if (opts.fileCount !== undefined && opts.fileCount <= 3 && changes === "") {
+    return { name: "changes folded into summary (small diff)", ok: true, detail: "no Changes section" };
+  }
+  const required = opts.fileCount !== undefined ? Math.min(3, Math.max(1, opts.fileCount)) : 3;
   return {
     name: "changes grouped with bold-label bullets",
-    ok: changes !== "" && bulletLines(changes).filter((l) => l.includes("**")).length >= 3,
-    detail: String(bulletLines(changes).length) + " bullets",
+    ok: changes !== "" && boldBullets >= required,
+    detail:
+      String(bulletLines(changes).length) +
+      " bullets (needs " +
+      String(boldBullets) +
+      "/" +
+      String(required) +
+      " bold)",
   };
 }
 
-function checkAnchors(description: string): RubricCheck {
+function checkAnchors(description: string, opts: RubricOptions): RubricCheck {
+  const count = countDiffAnchors(description);
+  if (opts.expectAnchors === false) {
+    // The prompt forbids diffhunk links when no Anchors section existed.
+    return { name: "no diff-hunk anchors invented", ok: count === 0, detail: String(count) + " anchors" };
+  }
+  // Anchor expectations scale with diff size: a 2-file PR legitimately has 2.
+  const required = Math.min(3, Math.max(1, opts.fileCount ?? 3));
   return {
     name: "diff-hunk anchors present",
-    ok: countDiffAnchors(description) >= 3,
-    detail: String(countDiffAnchors(description)) + " anchors",
+    ok: count >= required,
+    detail: String(count) + " anchors (needs " + String(required) + ")",
   };
 }
 
-function checkTesting(testing: string): RubricCheck {
+function checkTesting(testing: string, opts: RubricOptions): RubricCheck {
+  // The prompt frees small diffs from mandatory Testing; missing is then a pass.
+  if (opts.fileCount !== undefined && opts.fileCount <= 3 && testing === "") {
+    return { name: "testing skipped for small diff", ok: true, detail: "no Testing section (small diff)" };
+  }
   return {
     name: "testing has numbered steps + fence",
     ok: (testing.match(/^\d+\.\s/gm) ?? []).length >= 2 && /```/.test(testing),
@@ -87,15 +110,38 @@ function checkTesting(testing: string): RubricCheck {
   };
 }
 
-function checkFences(fences: number): RubricCheck {
-  return { name: "fences balanced", ok: fences % 2 === 0 && fences > 0, detail: String(fences) + " fences" };
+function checkFences(fences: number, opts: RubricOptions): RubricCheck {
+  // Small diffs don't need any fences; >0 must still be balanced.
+  const isSmall = opts.fileCount !== undefined && opts.fileCount <= 3;
+  return {
+    name: "fences balanced",
+    ok: fences % 2 === 0 && (fences > 0 || isSmall),
+    detail: String(fences) + " fences",
+  };
 }
 
 function checkLineLengths(description: string): RubricCheck {
+  let inFence = false;
+  let maxProse = 0;
+  let maxBullet = 0;
+  for (const line of description.split("\n")) {
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (/^[-*]\s/.test(line) || line.startsWith("|")) {
+      maxBullet = Math.max(maxBullet, line.length);
+    } else {
+      maxProse = Math.max(maxProse, line.length);
+    }
+  }
+  // Prose walls live in paragraphs (≤400); bullets carry identifiers (≤600);
+  // fenced commands/logs are exempt.
   return {
-    name: "no prose-wall lines (>400 chars)",
-    ok: description.split("\n").every((l) => l.length <= 400),
-    detail: "max=" + String(Math.max(...description.split("\n").map((l) => l.length))),
+    name: "no prose-wall lines (prose ≤400, bullets ≤600)",
+    ok: maxProse <= 400 && maxBullet <= 600,
+    detail: "prose=" + String(maxProse) + ", bullets=" + String(maxBullet),
   };
 }
 
@@ -112,26 +158,39 @@ function checkEnding(description: string): RubricCheck {
 }
 
 function checkCoverage(description: string, commitMessages: string[]): RubricCheck {
+  const threshold = coverageThreshold(commitMessages.length);
   return {
-    name: "commit coverage ≥90%",
-    ok: commitMessages.length === 0 || countCoveredCommits(commitMessages, description) / commitMessages.length >= 0.9,
+    name: "commit coverage ≥" + String(Math.round(threshold * 100)) + "%",
+    ok:
+      commitMessages.length === 0 ||
+      countCoveredCommits(commitMessages, description) / commitMessages.length >= threshold,
     detail: String(countCoveredCommits(commitMessages, description)) + "/" + String(commitMessages.length),
   };
 }
 
-// 10 checks, one point each. `expectAnchors` = the prompt carried an Anchors section.
+// 10 checks, one point each.
+// - expectAnchors: false when the prompt carried no Anchors section (the model
+//   is then forbidden from emitting any diffhunk links).
+// - fileCount: sizes the anchor/bullets minimums so small diffs aren't held to
+//   thresholds they can't reach.
+export interface RubricOptions {
+  expectAnchors?: boolean;
+  fileCount?: number;
+}
+
 export function scoreDescription(
   description: string,
   title: string,
   commitMessages: string[],
+  opts: RubricOptions = {},
 ): { score: number; checks: RubricCheck[] } {
   const checks: RubricCheck[] = [
     checkOpener(firstLine(description), title),
     checkSummary(sectionSlice(description, "Summary")),
-    checkChanges(sectionSlice(description, "Changes")),
-    checkAnchors(description),
-    checkTesting(sectionSlice(description, "Testing")),
-    checkFences((description.match(/```/g) ?? []).length),
+    checkChanges(sectionSlice(description, "Changes"), opts),
+    checkAnchors(description, opts),
+    checkTesting(sectionSlice(description, "Testing"), opts),
+    checkFences((description.match(/```/g) ?? []).length, opts),
     checkLineLengths(description),
     checkBulletWords(description),
     checkEnding(description),

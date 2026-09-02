@@ -1,5 +1,5 @@
 import { buildHouseStyleNote, type RepoStyle } from "../repo-style";
-import { TITLE_STYLE_GUIDANCE } from "./common";
+import { INTENT_TITLES_RULE, TITLE_STYLE_GUIDANCE } from "./common";
 
 export function buildMergeTitlePrompt(
   changesSummary: string,
@@ -8,8 +8,7 @@ export function buildMergeTitlePrompt(
   style?: RepoStyle,
 ): string {
   let prompt = "Generate ONLY a GitHub merge commit title for the following pull request changes.\n\n";
-  prompt +=
-    "A merge commit title summarizes what the entire PR accomplishes in a single line. It typically follows conventional commit format.\n\n";
+  prompt += "A merge commit title summarizes what the entire PR accomplishes in a single line.\n\n";
   prompt += changesSummary + "\n";
 
   if (existingTitle && existingTitle.trim().length > 0) {
@@ -35,6 +34,7 @@ export function buildMergeTitlePrompt(
   prompt += TITLE_STYLE_GUIDANCE + ". Under 72 characters.\n\n";
   prompt += "RULES:\n";
   prompt += "- Be specific — reference actual code entities from the diff, not generic descriptions\n";
+  prompt += INTENT_TITLES_RULE;
   prompt += "- The merge commit title should summarize the overall change concisely\n";
   prompt += "- Do NOT wrap the output in backtick fences\n";
   prompt += "- Do NOT include any description or body text, ONLY the title\n";

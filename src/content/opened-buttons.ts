@@ -110,13 +110,16 @@ function injectOpenedPRTitleButton(): void {
     return;
   }
 
-  const parentSpan = titleSpan.closest("span") ?? titleSpan.parentElement;
-  if (!parentSpan) {
-    log("warn", "No parent span for title span");
+  // Insert as a SIBLING of the markdown-title span, not inside it:
+  // extractExistingOpenedTitle() reads that span's textContent, and children of
+  // the span (including hidden split-button menu items) would corrupt the title.
+  const container = titleSpan.parentElement;
+  if (!container) {
+    log("warn", "No parent element for title span");
     return;
   }
 
-  parentSpan.appendChild(buildOpenedTitleSplitButton());
+  container.appendChild(buildOpenedTitleSplitButton());
   log("info", "Opened PR title button injected");
 }
 

@@ -4,8 +4,9 @@ import { callAPI } from "../llm";
 import { logMsg } from "../log";
 import { parseDescriptionOnlyResponse, parseTitleOnlyResponse } from "../parse";
 import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../prompts/merge-prompts";
-import { buildChangesSummary } from "../summary";
-import { buildStats, gatherPRData, getValidatedConfig } from "./shared";
+import { refineDescription } from "../refinement";
+import { buildChangesSummary, hasUsableAnchors } from "../summary";
+import { buildStats, extractLinkedIssues, gatherPRData, getValidatedConfig } from "./shared";
 
 export async function handleGenerateMergeTitle(
   data: OpenedPRData,
@@ -31,7 +32,7 @@ export async function handleGenerateMergeTitle(
       fileChanges: gathered.fileChanges,
       stats,
       branchContext: gathered.branchContext,
-      linkedIssues: [],
+      linkedIssues: extractLinkedIssues(gathered.commits),
       existingBody: gathered.prDetails.body || "",
     },
     gathered.diffText,
@@ -83,7 +84,7 @@ export async function handleGenerateMergeDescription(
       fileChanges: gathered.fileChanges,
       stats,
       branchContext: gathered.branchContext,
-      linkedIssues: [],
+      linkedIssues: extractLinkedIssues(gathered.commits),
       existingBody: existingDescription,
     },
     gathered.diffText,
@@ -105,5 +106,18 @@ export async function handleGenerateMergeDescription(
   const newDescription = parseDescriptionOnlyResponse(llmResult);
   logMsg("handleGenerateMergeDescription - parsed description length: " + String(newDescription.length));
 
-  return { description: newDescription };
+  // Same quality loop as the PR description flow: generate → score → refine.
+  const { description: refinedDescription, finalScore } = await refineDescription(
+    config,
+    gathered.prDetails.title || data.existingTitle || "",
+    newDescription,
+    gathered.commits.map((c) => c.message),
+    gathered.fileChanges.length > 0 && hasUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
+    3, // max iterations
+    10, // target score
+    buildStats(gathered.prDetails, gathered.fileChanges),
+  );
+  logMsg("handleGenerateMergeDescription - refinement score: " + String(finalScore));
+
+  return { description: refinedDescription };
 }

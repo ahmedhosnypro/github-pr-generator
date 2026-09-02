@@ -43,6 +43,10 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
   const existingTitle = gathered.prDetails.title || data.existingTitle || "";
   const existingDescription = data.existingDescription || gathered.prDetails.body || "";
 
+  // Hydrate missing anchors BEFORE building the summary so the prompt's
+  // anchors section and the refinement anchor check see the same set.
+  await hydrateMissingDiffAnchors(gathered.fileChanges);
+
   const changesSummary = buildChangesSummary(
     {
       commits: gathered.commits,
@@ -64,9 +68,6 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
   const newDescription = parseDescriptionOnlyResponse(llmResult);
   logMsg("handleGenerateDescription - parsed description length: " + String(newDescription.length));
 
-  // Hydrate missing anchors and resolve diff links for opened-PR flow
-  await hydrateMissingDiffAnchors(gathered.fileChanges);
-
   // Refine the generated description through quality feedback loop
   const { description: refinedDescription, finalScore } = await refineDescription(
     config,
@@ -76,8 +77,9 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
     gathered.fileChanges.length > 0 && hasUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
     3, // max iterations
     10, // target score
+    stats,
   );
-  logMsg("Refinement complete: " + String(finalScore) + "/10");
+  logMsg("Refinement complete: score " + String(finalScore));
 
   const finalDescription = resolveDiffLinks(refinedDescription, {
     owner: gathered.owner,
@@ -90,7 +92,7 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
       String(finalDescription.length) +
       " (refined score: " +
       String(finalScore) +
-      "/10)",
+      ")",
   );
 
   return applyDescriptionUpdate(config, gathered, finalDescription);

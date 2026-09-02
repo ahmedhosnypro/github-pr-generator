@@ -92,8 +92,9 @@ function applyValues(stored: ResolvedSettings, fileConfig: FileConfig | null): v
   modelInput.value = stored.model || fileConfig?.model || "";
   githubTokenInput.value = stored.githubToken || fileConfig?.githubToken || "";
   selectThinkingEffort(toThinkingEffort(stored.thinkingEffort || fileConfig?.thinkingEffort || "default"));
-  // Boolean() mirrors the original implicit coercion (older saves may hold "true"/"false" strings)
-  diffEnabledInput.checked = Boolean(resolveDiffEnabled(stored, fileConfig));
+  const diffEnabled = resolveDiffEnabled(stored, fileConfig);
+  // Legacy saves may hold "true"/"false" STRINGS; Boolean("false") is true.
+  diffEnabledInput.checked = diffEnabled !== false && diffEnabled !== "false";
   diffMaxLinesInput.value = String(stored.diffMaxLines || fileConfig?.diffMaxLines || 3000);
   diffMaxBytesInput.value = String(stored.diffMaxBytes || fileConfig?.diffMaxBytes || 100000);
   apiKeyInput.placeholder = fileConfig?.apiKey
@@ -111,13 +112,14 @@ export function loadSettings(): void {
   void Promise.all([storedPromise, readDirectStorage(), readFileConfig()]).then(([swRaw, direct, fileConfig]) => {
     const sw = asStored(swRaw);
     const stored = mergeStored(sw, direct);
+    // Log presence flags only — never serialize stored config (contains apiKey/githubToken).
     console.log(
-      "[PR Generator popup] load: sw=" +
-        JSON.stringify(sw) +
-        " direct=" +
-        JSON.stringify(direct) +
+      "[PR Generator popup] load: sw keys=" +
+        String(Object.keys(sw).length) +
+        " direct keys=" +
+        String(Object.keys(direct).length) +
         " file=" +
-        (fileConfig ? "(present)" : "(none)"),
+        (fileConfig ? "present" : "none"),
     );
     applyValues(stored, fileConfig);
     validateEndpointDebounced();

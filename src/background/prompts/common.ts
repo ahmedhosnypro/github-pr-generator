@@ -21,6 +21,8 @@ export const SECTIONS_PROMPT = [
   "Use these sections, scaled to the change: omit sections that would be empty, and for small diffs (a handful of files or ~50 changed lines) prefer a compact output — Summary plus Testing when verifiable, with commits folded into Summary — over a long scaffold. Commit Coverage remains mandatory in all sizes, even if rendered as one sentence.\n\n",
   "## Summary\n",
   "2-4 sentences, no bullets. For bug fixes, open with the root cause in one line — the observable symptom, then the mechanism that caused it — before describing the fix; for features or chores, state what the PR does and why it's needed. The first sentence must add information beyond the title — never restate it. Reference concrete identifiers from the diff, not generic descriptions. Large diffs may add one bolded scale line (e.g. **61 files, +1,669/−1,281**).\n\n",
+  "(Conditional) ## Problem\n",
+  "For bug fixes or behavioral changes whose failure mode is identifiable from the diff, insert this short section between Summary and Changes: the symptom, the mechanism that caused it, and where it manifests in the diff (one short paragraph or up to 3 bullets). Skip it for features, chores, and fixes whose cause would be guesswork.\n\n",
   "## Changes\n",
   "Group by area under ### subsections (skip subsections when only a few files changed). Every bullet is one line: `- **Bold label** — one concrete statement of at most ~25 words`, identifiers and paths in backticks, exactly one idea per bullet. Every file you name carries a diff hunk link from the Anchors section: [[N]](diffhunk://ANCHOR_Lstart-Rend). With 2+ comparable numeric results (before/after, per-suite, per-platform), use a markdown table with a one-line bold verdict caption instead of bullets.\n\n",
   "## Walkthrough\n",
@@ -61,13 +63,78 @@ export const FORMATTING_RULES: string[] = [
   "- Bullets are one line (≤ ~25 words) each; past 4 items, group them under ### subsections or bold labels. Sections are H2 ('##'), their children H3 ('###') — never bare-text pseudo-headers like 'Summary:' and never skip heading levels.\n",
   "- Paragraphs carry one idea and at most 3 sentences. Every fact appears exactly once. Every fence is balanced (open and close).\n",
   "- End the body on an artifact — a verdict line, 'Closes #N', or scope accounting — never on 'please review' or an empty checklist.\n",
-  "- No line exceeds 500 characters. Every bullet is one line of at most ~25 words (max ~60 words absolute cap). Numbered testing steps MUST put the command on its own line and 'Expected:' on the next line — never combine command + expected outcome on the same line. Expected lines MUST also not exceed 500 characters; wrap long expected outcomes across multiple lines.\n",
+  "- No prose line exceeds 400 characters (bullets carrying long identifiers may run to ~600; fenced commands/logs are exempt). Every bullet is one line of at most ~25 words (max ~60 words absolute cap). Numbered testing steps MUST put the command on its own line and 'Expected:' on the next line — never combine command + expected outcome on the same line. Expected lines MUST also not exceed 400 characters; wrap long expected outcomes across multiple lines.\n",
 ];
 
 // Title convention guidance (A8): corpus split across 94 repos is roughly
 // 30 conventional-commits / 26 plain-imperative / 26 mixed / 12 prefix styles.
 export const TITLE_STYLE_GUIDANCE =
   "Match the repo's title style if inferable from commit messages in this prompt (e.g. 'subsystem: verb', '[Area]', conventional commits); otherwise default to conventional commits";
+
+// UI-style extensions that signal the change affects something a user can see.
+const UI_FILE_RE = /\.(css|scss|sass|less|styl|tsx|jsx|vue|svelte|html?)$/i;
+
+/**
+ * Returns a Screenshots-section hint when the changed-files list is dominated
+ * by UI files, "" otherwise. Corpus basis (analysis/recommendations.md P3):
+ * screenshots are standard practice in UI-heavy repos, so the model is told to
+ * offer placeholder slots — never fabricated screenshots. Detection is
+ * heuristic: the prompt builders only receive the changes-summary text, so the
+ * "## Changed Files"/"## File Changes" bullet list is scanned for file tokens.
+ */
+export function buildScreenshotsHint(changesSummary: string): string {
+  const sectionMatch = changesSummary.match(/## (?:Changed Files|File Changes)\n+([\s\S]*?)(?=\n## |\s*$)/);
+  const section = sectionMatch?.[1];
+  if (!section) return "";
+
+  const paths: string[] = [];
+  for (const raw of section.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("-")) continue;
+    const token = line.match(/[\w./@-]+\.[a-z0-9]{1,6}\b/i);
+    if (token) paths.push(token[0]);
+  }
+
+  const uiCount = paths.filter((p) => UI_FILE_RE.test(p)).length;
+  if (uiCount < 2 || uiCount * 2 < paths.length) return "";
+
+  return (
+    "## Screenshots Hint\n" +
+    "This change is dominated by UI files. If it alters anything a user can see, add a `## Screenshots` section with plain placeholder slots the author can fill manually (e.g. `**Before:**` … / `**After:**` …). Never fabricate screenshots or claim visuals you cannot verify from the diff. Skip the section entirely when the change has no visible effect.\n\n"
+  );
+}
+
+/**
+ * Computed size-tier note (recommendations.md P2.1): the skeleton says "scaled
+ * to the change", but models anchor to concrete numbers, not adjectives. Reads
+ * the "## Stats" block and states the tier explicitly: small diffs (≤3 files or
+ * ≤50 changed lines) get a hard compact-output directive ("small but complete"
+ * is the corpus' merged ideal); large diffs get explicit permission for the
+ * full skeleton. Returns "" when stats are absent.
+ */
+export function buildSizeTierNote(changesSummary: string): string {
+  const block = changesSummary.match(/## Stats\n([\s\S]*?)(?=\n## |$(?![\s\S]))/m)?.[1];
+  if (!block) return "";
+  const files = Number.parseInt(/\d+/.exec(block)?.[0] ?? "", 10);
+  const additions = Number.parseInt(/- (\d+) additions/.exec(block)?.[1] ?? "", 10);
+  const deletions = Number.parseInt(/- (\d+) deletions/.exec(block)?.[1] ?? "", 10);
+  if (Number.isNaN(files) || Number.isNaN(additions) || Number.isNaN(deletions)) return "";
+  const changedLines = additions + deletions;
+
+  if (files <= 3 || changedLines <= 50) {
+    return (
+      "## Size Tier — Small Change\n" +
+      `This diff is small (${String(files)} file(s), ${String(changedLines)} changed lines). Keep the description compact and complete: an S-shaped Summary (root cause first if this is a fix), Commit Coverage folded in, and a Testing line only if verifiable from the diff. Skip Walkthrough and multi-section scaffolding entirely — a short, dense description is the ideal here.\n\n`
+    );
+  }
+  if (files >= 30 || changedLines >= 2000) {
+    return (
+      "## Size Tier — Large Change\n" +
+      `This diff is large (${String(files)} files, ${String(changedLines)} changed lines). Use the full section skeleton, group Changes under ### subsections, and wrap the file-by-file Walkthrough in a <details> block.\n\n`
+    );
+  }
+  return "";
+}
 
 /**
  * True when a PR body looks like a repo-provided template (headers plus HTML

@@ -11,7 +11,7 @@ import { buildCombinedPrompt } from "../prompts/combined";
 import { refineDescription } from "../refinement";
 import type { RepoStyle } from "../repo-style";
 import { EMPTY_REPO_STYLE } from "../repo-style";
-import { buildChangesSummary } from "../summary";
+import { buildChangesSummary, hasUsableAnchors } from "../summary";
 import { getValidatedConfig } from "./shared";
 
 function extractDiffOutcome(
@@ -52,6 +52,10 @@ export async function handleGenerate(data: GenerateData, onChunk?: (delta: strin
 
   const config = await getValidatedConfig();
 
+  // Hydrate missing anchors BEFORE building the summary, so the prompt's
+  // anchors section and the refinement anchor check see the same set.
+  await hydrateMissingDiffAnchors(data.fileChanges ?? []);
+
   // Repo style discovery runs in parallel with the diff fetch; on the PR
   // creation page branchContext may be missing, in which case style is empty.
   const owner = data.branchContext?.owner ?? "";
@@ -75,20 +79,19 @@ export async function handleGenerate(data: GenerateData, onChunk?: (delta: strin
   const parsed = parseCombinedResponse(result);
   logMsg("Parsed - title: " + parsed.title + ", description length: " + String(parsed.description.length));
 
-  // Hydrate missing anchors for files that had no DOM anchor (compare page flow)
-  await hydrateMissingDiffAnchors(data.fileChanges ?? []);
-
-  // Refine the generated description through quality feedback loop
+  // Refine the generated description through quality feedback loop. Anchors
+  // cannot be demanded when the diff fetch failed or no DOM anchors exist.
   const { description: refinedDescription, finalScore } = await refineDescription(
     config,
     parsed.title,
     parsed.description,
     data.commits?.map((c) => c.message) ?? [],
-    true,
+    hasUsableAnchors(data.fileChanges, hunkRanges),
     3, // max iterations
     10, // target score
+    data.stats ?? null,
   );
-  logMsg("Refinement complete: " + String(finalScore) + "/10");
+  logMsg("Refinement complete: score " + String(finalScore));
 
   // Convert diffhunk:// markers to real GitHub URLs
   const linkTarget = {
@@ -100,7 +103,7 @@ export async function handleGenerate(data: GenerateData, onChunk?: (delta: strin
   };
   const finalDescription = resolveDiffLinks(refinedDescription, linkTarget);
   logMsg(
-    "Final description length: " + String(finalDescription.length) + " (refined score: " + String(finalScore) + "/10)",
+    "Final description length: " + String(finalDescription.length) + " (refined score: " + String(finalScore) + ")",
   );
 
   return { title: parsed.title, description: finalDescription };

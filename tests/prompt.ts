@@ -1,5 +1,7 @@
+import { buildChangesSummary } from "../src/background/summary";
+import type { FileChangeType, GenerateData, FileChange as SrcFileChange } from "../src/types";
 import { buildCombinedPrompt } from "./prompt-mirror";
-import type { FileChange, GhPrDetails, GhPrFile, TestPrRef } from "./shared";
+import type { FileChange, GhPrDetails, TestPrRef } from "./shared";
 import { extractLinkedIssues, fetchPRCommits, fetchPRDetails, fetchPRFiles } from "./shared";
 import type { TestContext } from "./testkit";
 import { logPromptAnalysis } from "./testkit";
@@ -7,15 +9,6 @@ import { logPromptAnalysis } from "./testkit";
 // The prompt-builder mirror lives in tests/prompt-mirror.ts (wording must match
 // src/; tests/prompt-logic.ts fails on drift). Re-exported here for compatibility.
 export { buildCombinedPrompt };
-
-export interface ChangesSummaryData {
-  commits: { message: string }[];
-  fileChanges: FileChange[];
-  stats: { files: number; additions: number; deletions: number };
-  branchContext: { baseBranch: string; headBranch: string };
-  linkedIssues: string[];
-  existingBody: string;
-}
 
 export async function fetchPRDiff(testPr: TestPrRef, githubToken: string): Promise<string | null> {
   const { owner, repo } = testPr;
@@ -48,14 +41,26 @@ export async function fetchPRDiff(testPr: TestPrRef, githubToken: string): Promi
 export function buildSummaryData(
   prDetails: GhPrDetails,
   commits: string[],
-  files: GhPrFile[],
+  files: FileChange[],
   existingBody: string,
-): ChangesSummaryData {
+  owner: string,
+  repo: string,
+): GenerateData {
   return {
     commits: commits.map((c) => ({ message: c })),
-    fileChanges: files,
+    // gh CLI files lack the extension-only fields — fill them with the defaults
+    // the content script uses when no DOM anchor was scraped.
+    fileChanges: files.map(
+      (f): SrcFileChange => ({
+        path: f.path,
+        type: (f.type ?? "modified") as FileChangeType,
+        additions: f.additions,
+        deletions: f.deletions,
+        diffAnchor: f.diffAnchor ?? "",
+      }),
+    ),
     stats: { files: prDetails.files.length, additions: prDetails.additions, deletions: prDetails.deletions },
-    branchContext: { baseBranch: prDetails.baseRefName, headBranch: prDetails.headRefName },
+    branchContext: { owner, repo, baseBranch: prDetails.baseRefName, headBranch: prDetails.headRefName },
     linkedIssues: extractLinkedIssues(commits),
     existingBody,
   };
@@ -82,8 +87,11 @@ export async function buildPromptFromContext(
   const files = fetchPRFiles(testPr);
   const diffText = await fetchPRDiff(testPr, githubToken);
 
-  const data = buildSummaryData(prDetails, commits, files, existingBody);
-  const changesSummary = buildChangesSummary(data, diffText);
+  const data = buildSummaryData(prDetails, commits, files, existingBody, testPr.owner, testPr.repo);
+  // Deliberately uses the real src builder (not a fork) so prompt tests see the
+  // exact summary format the extension produces; hunkRanges are unknown to the
+  // gh-CLI layer, so anchors come only from diffAnchor fields (absent here).
+  const changesSummary = buildChangesSummary(data, diffText, null);
   const prompt = buildCombinedPrompt(changesSummary, existingBody);
 
   const coveredInSummary = logPromptAnalysis(
@@ -97,37 +105,4 @@ export async function buildPromptFromContext(
     existingBodyNote,
   );
   return { commits, changesSummary, prompt, coveredInSummary };
-}
-
-// Copied from background.js - buildChangesSummary
-export function buildChangesSummary(data: ChangesSummaryData, diffText: string | null): string {
-  let summary = "";
-  summary += "## Commits\n";
-  data.commits.forEach((c, i) => {
-    summary += `${String(i + 1)}. ${c.message}\n\n`;
-  });
-  summary += "## File Changes\n";
-  data.fileChanges.forEach((f) => {
-    summary += `- ${f.path} (${String(f.type)}): +${String(f.additions)}/-${String(f.deletions)}`;
-    if (f.diffAnchor) summary += ` [[${f.diffAnchor}]]`;
-    summary += "\n";
-  });
-  summary += "\n## Stats\n";
-  summary += `- Files: ${String(data.stats.files)}\n`;
-  summary += `- Additions: ${String(data.stats.additions)}\n`;
-  summary += `- Deletions: ${String(data.stats.deletions)}\n`;
-  summary += "\n## Branch Context\n";
-  summary += `- Base: ${data.branchContext.baseBranch}\n`;
-  summary += `- Head: ${data.branchContext.headBranch}\n`;
-  if (data.linkedIssues.length > 0) {
-    summary += "\n## Linked Issues\n";
-    data.linkedIssues.forEach((issue) => {
-      summary += `- ${issue}\n`;
-    });
-  }
-  if (diffText !== null) {
-    summary += "\n## Diff (truncated)\n";
-    summary += diffText;
-  }
-  return summary;
 }

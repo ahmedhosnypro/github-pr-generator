@@ -4,8 +4,8 @@ import { errorMessage, logMsg } from "./log";
 // Only overwrite keys actually present in `data` so that partial updates
 // (e.g. the popup's per-field autosave) don't clobber the other saved fields
 // with empty strings, which would silently make getConfig() fall back to the
-// bundled config.local.json values.
-function buildStorageUpdate(data: SaveConfigData): StoredConfig {
+// bundled config.local.json values. Exported for unit tests (config-save.test coverage).
+export function buildStorageUpdate(data: SaveConfigData): StoredConfig {
   const update: StoredConfig = {};
   if (data.apiEndpoint !== undefined) update.apiEndpoint = (data.apiEndpoint || "").trim();
   if (data.apiKey !== undefined) update.apiKey = (data.apiKey || "").trim();
@@ -13,8 +13,16 @@ function buildStorageUpdate(data: SaveConfigData): StoredConfig {
   if (data.githubToken !== undefined) update.githubToken = (data.githubToken || "").trim();
   if (data.thinkingEffort !== undefined) update.thinkingEffort = (data.thinkingEffort || "").trim();
   if (data.diffEnabled !== undefined) update.diffEnabled = data.diffEnabled;
-  if (data.diffMaxLines !== undefined) update.diffMaxLines = Number.parseInt(String(data.diffMaxLines), 10);
-  if (data.diffMaxBytes !== undefined) update.diffMaxBytes = Number.parseInt(String(data.diffMaxBytes), 10);
+  // Cleared numeric fields arrive as "" and parse to NaN — drop them instead
+  // of writing NaN to storage (the read side still falls back to its default).
+  if (data.diffMaxLines !== undefined) {
+    const n = Number.parseInt(String(data.diffMaxLines), 10);
+    if (!Number.isNaN(n)) update.diffMaxLines = n;
+  }
+  if (data.diffMaxBytes !== undefined) {
+    const n = Number.parseInt(String(data.diffMaxBytes), 10);
+    if (!Number.isNaN(n)) update.diffMaxBytes = n;
+  }
   return update;
 }
 

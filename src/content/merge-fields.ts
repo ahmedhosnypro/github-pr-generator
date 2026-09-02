@@ -46,7 +46,8 @@ export function findMergeDescTextarea(): HTMLTextAreaElement | null {
     const parentWrapper = confirmContainer.parentElement;
     if (parentWrapper) {
       const textarea = parentWrapper.querySelector<HTMLTextAreaElement>(
-        '.prc-Textarea-TextArea-snlco, textarea[placeholder*="extended description"]',
+        // Hash-agnostic Primer class (the -<hash> suffix rotates every Primer release)
+        'textarea[class*="prc-Textarea-TextArea"], textarea[placeholder*="extended description"]',
       );
       if (textarea) {
         log("info", "findMergeDescTextarea - found near ConfirmMerge container");
@@ -63,8 +64,8 @@ export function findMergeDescTextarea(): HTMLTextAreaElement | null {
     return first;
   }
 
-  // Fallback: prc-Textarea class
-  const prcTextarea = document.querySelector<HTMLTextAreaElement>(".prc-Textarea-TextArea-snlco");
+  // Fallback: Primer Textarea class, matched hash-agnostically
+  const prcTextarea = document.querySelector<HTMLTextAreaElement>('textarea[class*="prc-Textarea-TextArea"]');
   if (prcTextarea) {
     log("info", "findMergeDescTextarea - found by prc class");
     return prcTextarea;

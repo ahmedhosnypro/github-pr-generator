@@ -27,10 +27,18 @@
     "test:format": "bun run tests/prompt-format.ts",
     "test:format-live": "bun run tests/format-live.ts",
     "lab": "bun run tests/pr-lab.ts",
+    "lab:parallel": "bun run tests/pr-lab-parallel.ts",
     "test:stream": "bun run tests/stream-parse.ts",
     "test:pr-creation": "bun run tests/pr-creation-prompt.ts",
     "test:style": "bun run tests/repo-style.ts",
-    "test": "bun run test:logic && bun run test:parse && bun run test:format && bun run test:stream && bun run test:style && bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation"
+    "test": "bun run test:logic && bun run test:parse && bun run test:format && bun run test:stream && bun run test:style && bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation && bun run test:refinement && bun run test:diff-parse && bun run test:config-save && bun run test:llm && bun run test:sse && bun run test:stream-render",
+    "test:refinement": "bun run tests/refinement.ts",
+    "test:diff-parse": "bun run tests/diff-parse.ts",
+    "test:config-save": "bun run tests/config-save.ts",
+    "test:llm": "bun run tests/llm.ts",
+    "test:sse": "bun run tests/sse.ts",
+    "test:stream-render": "bun run tests/stream-render.ts",
+    "test:e2e": "bun run tests/extension-e2e.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",
@@ -43,6 +51,7 @@
     "jscpd": "^5.1.0",
     "knip": "^6.33.0",
     "oxlint": "^1.80.0",
+    "playwright": "^1.62.1",
     "sharp": "^0.35.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.68.0"

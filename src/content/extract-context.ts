@@ -49,7 +49,7 @@ function readBranchInputs(): [string, string] {
 
 function applyCompareUrl(url: string, base: string, head: string): [string, string] {
   if (base && head) return [base, head];
-  const match = /\/compare\/([^?#\s]+?)(?:\?|$|\s)/.exec(url);
+  const match = /\/compare\/([^?#\s]+?)(?:[?#]|$|\s)/.exec(url);
   const spec = match?.[1];
   if (spec === undefined) return [base, head];
   const parts = spec.split("...");

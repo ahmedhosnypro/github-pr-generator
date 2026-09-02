@@ -24,6 +24,8 @@ export interface RepoStyle {
   length: LengthBucket | null;
   /** True when most sampled merged PRs follow a template scaffold. */
   templateHeavy: boolean;
+  /** True when the PR template mandates an AI-assistance disclosure (checkbox etc.). */
+  aiDisclosure: boolean;
 }
 
 export const EMPTY_REPO_STYLE: RepoStyle = {
@@ -32,6 +34,7 @@ export const EMPTY_REPO_STYLE: RepoStyle = {
   exampleTitles: [],
   length: null,
   templateHeavy: false,
+  aiDisclosure: false,
 };
 
 const CONVENTIONAL_TITLE =
@@ -98,12 +101,24 @@ function authoredWordCount(body: string): number {
 
 export function inferLength(samples: PrSample[]): LengthBucket | null {
   if (samples.length < 3) return null;
-  // oxlint-disable-next-line no-array-sort -- toSorted unavailable (tsconfig targets ES2022); Array.from owns the copy being sorted
-  const counts = Array.from(samples, (s) => authoredWordCount(s.body)).sort((a, b) => a - b);
+  const counts = samples.map((s) => authoredWordCount(s.body)).toSorted((a, b) => a - b);
   const median = counts[Math.floor(counts.length / 2)] ?? 0;
   if (median < 50) return "S";
   if (median <= 200) return "M";
   return "L";
+}
+
+// Mandatory AI-assistance disclosure in the template: a checkbox or attestation
+// line mentioning AI/LLM tooling (llama.cpp, immich, ohmyzsh style clauses).
+// Line-based scan — no multi-line regex.
+function templateRequiresAiDisclosure(template: string): boolean {
+  for (const line of template.split("\n")) {
+    const trimmed = line.trim();
+    const isBulletOrCheckbox = /^[-*]\s+(\[[ xX]\]\s+)?/.test(trimmed) || /^\d+\.\s+/.test(trimmed);
+    if (!isBulletOrCheckbox) continue;
+    if (/\b(?:AI|LLM|language model|Claude|Copilot|ChatGPT|generated)\b/i.test(trimmed)) return true;
+  }
+  return false;
 }
 
 export function inferRepoStyle(template: string | null, samples: PrSample[]): RepoStyle {
@@ -115,6 +130,7 @@ export function inferRepoStyle(template: string | null, samples: PrSample[]): Re
     exampleTitles: examples,
     length: inferLength(samples),
     templateHeavy: samples.length >= 3 && templateBodies / samples.length >= DOMINANT_SHARE,
+    aiDisclosure: template !== null && templateRequiresAiDisclosure(template),
   };
 }
 
@@ -133,7 +149,7 @@ const LENGTH_TEXT: Record<LengthBucket, string> = {
 };
 
 export function buildHouseStyleNote(style: RepoStyle): string {
-  if (!style.titleStyle && !style.length && !style.templateHeavy) return "";
+  if (!style.titleStyle && !style.length && !style.templateHeavy && !style.aiDisclosure) return "";
   let note = "## House Style (inferred from this repo's recently merged PRs)\n";
   if (style.titleStyle) {
     note += "- Titles here use " + TITLE_STYLE_TEXT[style.titleStyle] + ".\n";
@@ -147,6 +163,10 @@ export function buildHouseStyleNote(style: RepoStyle): string {
   if (style.templateHeavy) {
     note +=
       "- Most merged PRs follow the repo's PR template — template fidelity is critical; preserve all boilerplate byte-for-byte, including HTML comments and checkboxes.\n";
+  }
+  if (style.aiDisclosure) {
+    note +=
+      "- This repo's PR template mandates an AI-assistance disclosure. The disclosure question/checkbox MUST be answered truthfully per its wording — never pre-check it as satisfied, never remove or reword it, and never claim the change was made without AI assistance.\n";
   }
   return note + "\n";
 }

@@ -101,14 +101,21 @@ function parseJsonResponseBody(responseText: string): ChatCompletionResponse {
     return { choices: [{ message: { content: aggregated } }] };
   }
 
-  const cleanResponseText = responseText.replace(/data:\s*\[DONE\].*$/s, "").trim();
-  if (cleanResponseText !== responseText.trim()) {
-    logMsg("Stripped trailing SSE data from response");
-  }
-
+  // Try strict JSON first; only fall back to stripping a trailing SSE [DONE]
+  // line when parsing fails — stripping unconditionally could eat a legitimate
+  // "data: [DONE]" substring inside a JSON payload and corrupt it.
   try {
-    return JSON.parse(cleanResponseText) as ChatCompletionResponse;
+    return JSON.parse(responseText) as ChatCompletionResponse;
   } catch (parseErr) {
+    const cleaned = responseText.replace(/\n?data:\s*\[DONE\][^\n]*\s*$/, "").trim();
+    if (cleaned !== responseText.trim()) {
+      logMsg("Stripped trailing SSE data from response");
+      try {
+        return JSON.parse(cleaned) as ChatCompletionResponse;
+      } catch {
+        // fall through to the error below with the original parse error
+      }
+    }
     logMsg("JSON.parse failed: " + errorMessage(parseErr));
     logMsg("Response text (first 300): " + responseText.substring(0, 300));
     throw new Error("Failed to parse API response as JSON: " + errorMessage(parseErr), { cause: parseErr });
@@ -120,8 +127,13 @@ export async function callAPI(
   prompt: string,
   temperature = 0.3,
   onChunk?: (delta: string) => void,
+  allowEmptyRetry = true,
+  allowTransientRetry = true,
 ): Promise<string> {
-  const url = config.apiEndpoint + "/chat/completions";
+  // Normalize "https://host/v1/" → "https://host/v1/chat/completions"; the popup
+  // test path strips trailing slashes too, so a "//chat" URL would only ever hit
+  // this generation path, not validation.
+  const url = config.apiEndpoint.replace(/\/+$/, "") + "/chat/completions";
   logMsg(
     "Calling API: " +
       url +
@@ -134,6 +146,14 @@ export async function callAPI(
   );
 
   const response = await postChatCompletion(url, config, prompt, temperature);
+  // Transient 5xx/429s — retry once with backoff. The LLM serving layer is
+  // flaky enough (observed 503s mid-run) that a single retry saves a refinement
+  // iteration from dying to what is a momentary infrastructure hiccup.
+  if (!response.ok && allowTransientRetry && [429, 500, 502, 503, 504].includes(response.status)) {
+    logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
+    await new Promise((r) => setTimeout(r, 2000));
+    return callAPI(config, prompt, temperature, onChunk, allowEmptyRetry, false);
+  }
   await assertOkResponse(response);
 
   const contentType = response.headers.get("content-type") || "";
@@ -149,6 +169,13 @@ export async function callAPI(
   }
 
   if (!content) {
+    // Empty stream aggregation happens on transient server hiccups (observed
+    // in parallel lab runs); retry the whole request once before failing.
+    if (allowEmptyRetry) {
+      logMsg("No content in API response — retrying once");
+      await new Promise((r) => setTimeout(r, 1000));
+      return callAPI(config, prompt, temperature, onChunk, false);
+    }
     logMsg("No content in API response");
     throw new Error("No content in API response");
   }

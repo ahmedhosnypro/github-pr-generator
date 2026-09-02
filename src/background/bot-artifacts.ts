@@ -37,14 +37,24 @@ function isBotLine(line: string): boolean {
  * Remove hallucinated bot/AI-tool signatures from a generated description.
  * Conservative by design: when the text looks like a preserved PR template
  * (headers + HTML comments/checkboxes), checklist lines are left untouched
- * and only unambiguous tool markers are removed.
+ * and only unambiguous tool markers are removed. A bot-authored heading
+ * (e.g. "## Summary by CodeRabbit") also swallows its own section content
+ * up to the next heading — but never anything beyond it.
  */
 export function stripBotArtifacts(description: string): string {
   const templateLike = isLikelyTemplate(description);
   // Whole-comment markers are harmless inline too — strip them everywhere first.
   const text = description.replaceAll(/<!--\s*(?:copyberry-projection-id|coderabbit|greptile)[^>]*-->/gi, "");
   const kept: string[] = [];
+  let inBotSection = false;
   for (const line of text.split("\n")) {
+    if (/^#{1,6}\s/.test(line.trim())) {
+      inBotSection = HEADER_TOOL.test(line);
+      if (inBotSection) continue;
+    } else if (inBotSection && line.trim() !== "") {
+      // Content lines of a bot-authored section — drop until next heading.
+      continue;
+    }
     if (isBotLine(line)) continue;
     if (!templateLike && isRubberStampLine(line)) continue;
     kept.push(line);

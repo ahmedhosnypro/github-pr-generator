@@ -56,7 +56,6 @@ export function parseHunkLineRanges(diffText: string): GitHubHunksByFile {
     // Match single file diff header in PR compare interface
     const prFileMatch = /^diff --(\S+)/.exec(line);
     if (prFileMatch && currentFile === null) {
-      i++;
       const compareFile = matchCompareFile(lines, i);
       if (compareFile !== null) {
         currentFile = compareFile;

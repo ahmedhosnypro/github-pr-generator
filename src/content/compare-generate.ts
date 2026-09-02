@@ -31,18 +31,27 @@ function fillPRFields(title: string, description: string): void {
   const bodyTextarea = document.querySelector<HTMLTextAreaElement>("textarea#pull_request_body");
 
   if (titleInput) {
-    setReactValue(titleInput, title);
-    titleInput.focus();
-    titleInput.blur();
-    log("info", "Title input filled");
+    // Never overwrite the user's existing title with an empty parse result.
+    if (title.trim().length > 0) {
+      setReactValue(titleInput, title);
+      titleInput.focus();
+      titleInput.blur();
+      log("info", "Title input filled");
+    } else {
+      log("warn", "Skipped empty title — keeping the user's existing value");
+    }
   } else {
     log("error", "Title input not found!");
   }
 
   if (bodyTextarea) {
-    setReactValue(bodyTextarea, description);
-    bodyTextarea.dispatchEvent(new Event("change", { bubbles: true }));
-    log("info", "Description textarea filled");
+    if (description.trim().length > 0) {
+      setReactValue(bodyTextarea, description);
+      bodyTextarea.dispatchEvent(new Event("change", { bubbles: true }));
+      log("info", "Description textarea filled");
+    } else {
+      log("warn", "Skipped empty description — keeping the user's existing text");
+    }
 
     const writeTab = document.querySelector<HTMLButtonElement>(
       'button.write-tab.js-write-tab:not([aria-selected="true"])',
