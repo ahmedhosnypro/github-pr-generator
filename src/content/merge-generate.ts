@@ -71,7 +71,12 @@ async function generateMergeTitle(): Promise<void> {
     },
   );
   fillMergeFields(response.title, "");
-  showToast("Merge commit title generated!");
+  // Toast only what actually changed — fillMergeFields skips empty values.
+  if (response.title.trim().length > 0) {
+    showToast("Merge commit title generated!");
+  } else {
+    showToast("Merge title was empty — nothing applied.", true);
+  }
 }
 
 export async function handleGenerateMergeDescription(): Promise<void> {
@@ -129,5 +134,9 @@ async function generateMergeDescription(): Promise<void> {
     },
   );
   fillMergeFields("", response.description);
-  showToast("Merge commit description generated!");
+  if (response.description.trim().length > 0) {
+    showToast("Merge commit description generated!");
+  } else {
+    showToast("Merge description was empty — nothing applied.", true);
+  }
 }

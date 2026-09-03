@@ -5,7 +5,17 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { type LabRunResult, labConfig, runPrLab } from "./pr-lab-run";
 
-const TOP_REPO_COUNT = 10;
+const args = process.argv.slice(2);
+function intArg(name: string, fallback: number): number {
+  const i = args.indexOf("--" + name);
+  const raw = i === -1 ? undefined : args[i + 1];
+  if (raw === undefined) return fallback;
+  const v = Number.parseInt(raw, 10);
+  return Number.isNaN(v) ? fallback : v;
+}
+
+const TOP_REPO_COUNT = intArg("count", 10);
+const MIN_STARS = intArg("min-stars", 50000);
 // Bounds for "a good PR": enough real code to describe, small enough that the
 // diff endpoint (>300-file limit) and context budget stay safe.
 const MIN_CHANGED_FILES = 2;
@@ -23,10 +33,10 @@ interface GhPrRow {
   mergedAt: string;
 }
 
-function gh(args: string[]): string {
-  const proc = Bun.spawnSync(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
+function gh(cmdArgs: string[]): string {
+  const proc = Bun.spawnSync(["gh", ...cmdArgs], { stdout: "pipe", stderr: "pipe" });
   if (proc.exitCode !== 0) {
-    throw new Error("gh " + args.join(" ") + " failed: " + proc.stderr.toString().slice(0, 200));
+    throw new Error("gh " + cmdArgs.join(" ") + " failed: " + proc.stderr.toString().slice(0, 200));
   }
   return proc.stdout.toString();
 }
@@ -36,7 +46,9 @@ function topRepos(): string[] {
   // gh search repos mangles query strings with multiple qualifiers → use the API.
   const out = gh([
     "api",
-    "search/repositories?q=stars:%3E50000+pushed:%3E2026-01-01+-topic:awesome+-topic:awesome-list+-topic:list+-topic:books+-topic:roadmap+-topic:learning+-topic:tutorial&sort=stars&order=desc&per_page=" +
+    "search/repositories?q=stars:%3E" +
+      String(MIN_STARS) +
+      "+pushed:%3E2026-01-01+-topic:awesome+-topic:awesome-list+-topic:list+-topic:books+-topic:roadmap+-topic:learning+-topic:tutorial&sort=stars&order=desc&per_page=" +
       String(TOP_REPO_COUNT),
     "--jq",
     ".items[].full_name",

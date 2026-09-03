@@ -103,6 +103,11 @@ function descriptionRules(): string {
     SCOPE_BOUNDARIES_RULE,
     NO_EMPTY_OR_PLACEHOLDERS_RULE,
     ...FORMATTING_RULES,
+    // Anchor examples matter for description-only too — same lens on output quality.
+    "- **Examples**:",
+    "  ✅ ✔️ `src/auth.ts` — Added JWT token validation. [[1]](diffhunk://#diff-46b776ea_L5-R25)\n",
+    "  ✅ ✔️ Updated loading backgrounds in `loading.tsx` to use theme variables. [[2]](diffhunk://#diff-b688a522_L10-R30), [[3]](diffhunk://#diff-b688a522_L40-R80)\n",
+    "  ❌ ❌ **Don't:** Many files updated to fix dark mode theming. (No diff links)\n",
     "- Do NOT output a title line — output ONLY the description body\n",
     "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
   ].join("");

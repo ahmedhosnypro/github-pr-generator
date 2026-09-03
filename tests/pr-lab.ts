@@ -24,5 +24,10 @@ if (result.error) {
 }
 console.log("\n=== Rubric (" + String(result.score) + "/10) ===");
 for (const c of result.checks) console.log((c.ok ? "✅ " : "❌ ") + c.name + " — " + c.detail);
+if (result.score < 10) {
+  const failing = result.checks.filter((c) => !c.ok);
+  console.log("\nFailing checks (needs attention):");
+  for (const c of failing) console.log("  → " + c.name + " — " + c.detail);
+}
 console.log("\nArtifacts: " + result.artifactDir);
 process.exit(result.score === 10 ? 0 : 1);

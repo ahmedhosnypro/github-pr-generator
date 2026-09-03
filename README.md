@@ -229,7 +229,7 @@ Add a `testPr` section to your `config.local.json`:
 
 ### Running Tests
 
-The full offline suite (`bun run test`) chains thirteen suites: **logic** (prompt wording, mirror drift), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **coverage**/**extension**/**full** (fetch-based, use the `testPr` fixture), **pr-creation** (prompt assembly), **refinement** (quality-loop scorer), **diff-parse** (hunk extraction), **config-save** (popup → SW config write), **llm** (callAPI via mock fetch), **sse** (incremental stream parser), **stream-render** (live-preview helpers), and **rubric** (acceptance-gate checks).
+The full offline suite (`bun run test`) chains seventeen suites: **logic** (prompt wording, mirror drift), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **coverage**/**extension**/**full** (fetch-based, use the `testPr` fixture), **pr-creation** (prompt assembly), **refinement** (quality-loop scorer), **diff-parse** (hunk extraction), **config-save** (popup → SW config write), **llm** (callAPI via mock fetch), **sse** (incremental stream parser), **stream-render** (live-preview helpers), **rubric** (acceptance-gate checks), and **linkify** (URL resolution from diffhunk markers).
 
 ```bash
 # Run all offline tests
@@ -252,6 +252,7 @@ bun run test:llm           # callAPI over mocked fetch (retries, JSON/SSE)
 bun run test:sse           # incremental SSE parser
 bun run test:stream-render # streaming-render helpers in the content script
 bun run test:rubric        # acceptance-gate checks against generated output
+bun run test:linkify       # diffhunk → GitHub URL resolution + bare-ref stripping
 ```
 
 ### Live labs (hit the real LLM endpoint — not part of `bun run test`)
