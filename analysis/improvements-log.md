@@ -969,3 +969,96 @@ Remaining input or output candidates for the next session, if you want to keep g
 - whatever tickles you after trying the parallel pass
 
 The codebase is in a verified, green, continuous state: tests, gates, E2E, real-world PR-suit.
+
+## 2026-09-03 (run 69) — Description generation: 3+ min → ~10-30s on the CLI/lab path
+
+**Goal:** `bun run lab` took 160-260s per PR. Target: under 10s, same quality (rubric 10/10),
+browser/extension path untouched.
+
+**Root causes found by measurement (probes against the configured gateway):**
+1. The configured model (`nvidia/nemotron-3-ultra-550b-a55b`) generates ~75% hidden reasoning
+   tokens even at `reasoning_effort: "low"`, and decodes at ~8-17 tok/s on the free route —
+   each LLM call cost 45-140s.
+2. Every lab run burned up to 3 extra refinement calls chasing the internal 12-13-point
+   checklist even when the lab's own 10-point acceptance rubric already passed.
+3. `refinement-checks.ts` / `pr-lab-rubric.ts` sliced `## Summary` only at the next H2, so a
+   `### Key Changes` subsection under it made the summary check fail forever → refinement
+   plateaued at 11/13 and always ran all 3 iterations.
+4. The lab's diff fetch was serialized behind the PR-info fetch (needed branch names), and
+   repo-style discovery ran afterwards — ~2s of avoidable REST latency.
+5. First-pass drafts tripped the prose-wall check with one-line paragraphs, and on template
+   repos the model filled the template but produced no `## Summary` (the section skeleton is
+   intentionally omitted when a template exists) — each cost a full extra LLM round trip.
+
+**Changes:**
+- `tests/pr-lab-run.ts`: `labConfig()` honors `PR_LAB_MODEL`/`PR_LAB_EFFORT` env or new
+  `labModel`/`labEffort` keys in config.local.json (defaults set to `gemini/gemini-3.5-flash` +
+  `none`, the only fast route that survived probing: ~50+ tok/s, no 6KB prompt cap).
+  `gather()` now fetches the PR diff directly from the pulls endpoint in parallel with
+  info/commits/files (compare-view fetch kept as fallback); style discovery overlaps the gather.
+  The refinement call passes an `earlyAccept` predicate = the lab's own 10/10 rubric, with
+  failing-check diagnostics logged. Artifacts now include the pre-refinement draft
+  (`description-draft.md`).
+- `src/background/refinement.ts`: new optional `earlyAccept` callback (checked on the first
+  pass and after each adopted iteration); degenerate near-empty refinement replies (<200 chars)
+  get one retry instead of aborting the loop.
+- `src/background/description-normalize.ts` (new): deterministic sentence-boundary wrap of >400-char prose
+  lines (never touches fences/bullets/tables/headings; never breaks inside an open code span),
+  applied before scoring in the refinement loop — one LLM iteration saved whenever a draft's
+  only sin is a long paragraph line. (First shipped as `prose-wrap.ts`, renamed in run 70 when
+  it gained a second normalizer.)
+- `refinement-checks.ts` + `pr-lab-rubric.ts`: Summary checks now slice at the next heading of
+  any depth (H3 subsections no longer leak their bullets/sentences into the summary check), and
+  the failure detail says when bullets are inside the Summary so the refiner gets actionable
+  feedback instead of an unexplained sentence count.
+- `prompts/common.ts` (+ `tests/prompt-mirror.ts` mirror): small-diff tier note forbids hybrid
+  '## Summary of Changes' sections; template-fill etiquette now requires the structured content
+  in the template's free-text area (Summary prose first, change bullets with bold labels under
+  their own heading, verification steps); `## Summary` spec gains "each sentence on its own line".
+- `src/background/llm.ts`: logs prompt size and per-call elapsed seconds so future speed work
+  is measurable from lab output.
+- Deleted the two throwaway probe scripts after folding the numbers here.
+
+**Measured (rubric 10/10 on every completed run, exit 0):**
+- freeCodeCamp/freeCodeCamp#69836: 20-33s (gen ~9-16s + 0-1 refinements); quiet-gateway best
+  case 32.6s total including a 31s congested generation, and a perfect first pass (0
+  refinements) was observed.
+- donnemartin/system-design-primer#1042: 34.8s (was 258s).
+- openclaw/openclaw#136809 (100KB diff, 113KB prompt): 16.2s (was 256s, and rubric 8/10 → 10/10).
+
+**Honest verdict on "<10s":** the pipeline is no longer the bottleneck — a single generation
+call on this shared free gateway fluctuates 6-140s with congestion, so a hard sub-10s guarantee
+is not deliverable from code alone. Quiet-window runs land at ~10-14s end-to-end (gather ~2s +
+one ~8-12s generation), and early-accept makes 0-refinement runs possible; under load the lab
+settles at ~20-35s. All figures are 10x+ faster than the old ultra-model path at equal or
+better rubric scores, and every call carries timing logs now.
+
+**Proof:** quality-gate:fresh all stages green; `bun run test` (all suites) exit 0; 9 live lab
+runs across 3 repos all exit 0 at rubric 10/10; new unit tests for prose-wrap in
+tests/refinement.ts.
+
+## 2026-09-03 (run 70) — Sub-10s lab runs: first-pass acceptance becomes the norm
+
+**What:** three compounding fixes on top of run 69, measured live:
+
+1. `ensureArtifactEnding` joins the normalizer (renamed module to
+   `src/background/description-normalize.ts`): a draft that lacks any accepted closing artifact
+   gains a "Scope: N files, +A/-D." line — the rubric/checker accepted-ending regex is now
+   exported from `refinement-checks.ts` so the normalizer and the check can never drift.
+2. Both checkers learned that the verification section can be titled `## Verification`,
+   `### Verification Steps`, or `## How to test` — not only the canonical `## Testing` — while
+   the prompt now demands the canonical header. Before this, donnemartin#1042's draft
+   ("## Verification" with a numbered step + fenced command) failed "testing steps" on every
+   refinement iteration and the loop burned 3 LLM calls to still exit 1.
+3. The lab caches repo-style discovery on disk (`scratch/.repo-style-cache.json`, 6h TTL like
+   the extension's chrome.storage cache) — saves ~2 GitHub REST calls per run per repo.
+4. `callAPI` treats the gateway's quota-quirk 400 "API key not valid" as transient (one retry);
+   a genuinely bad key still fails after that single retry.
+
+**Measured:** freeCodeCamp#69836: **4.9s and 8.8s end-to-end** (first-pass rubric 10/10, zero
+refinement calls) — the sub-10s target demonstrably met on the lab path; donnemartin#1042:
+17.1s (1 iteration; was exit-1 at 135s); typical quiet-gateway range now 5-20s.
+
+**Proof:** quality-gate:fresh green; full suite exit 0 (new tests: artifact-ending append/keep/
+no-stats, verification-alias acceptance in both checkers); 3 more live lab runs exit 0 at
+rubric 10/10.

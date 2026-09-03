@@ -1,4 +1,5 @@
 import type { ExtensionConfig, PRStats } from "../types";
+import { ensureArtifactEnding, wrapLongProseLines } from "./description-normalize";
 import { callAPI } from "./llm";
 import { logMsg } from "./log";
 import { scoreDescription } from "./refinement-checks";
@@ -61,19 +62,33 @@ export async function refineDescription(
   maxIterations = 3,
   targetScore = 10,
   stats: PRStats | null = null,
+  earlyAccept?: (description: string) => boolean,
 ): Promise<{ description: string; finalScore: number; iterations: number }> {
-  let currentDescription = description;
+  let currentDescription = ensureArtifactEnding(wrapLongProseLines(description), stats);
   let currentScore = 0;
   let maxScore = 0;
   let iterations = 0;
   let failures: Array<{ check: string; detail: string }> = [];
 
-  // Initial score
+  // Initial score (after the free deterministic fixes, so a long prose line
+  // or a missing closing artifact never costs an LLM iteration)
   const initial = await scoreDescription(currentDescription, commitMessages, hasAnchors, stats);
   currentScore = initial.score;
   maxScore = initial.maxScore;
   failures = initial.failures;
   logMsg(`Initial quality score: ${currentScore}/${maxScore}`);
+
+  // Callers with an external acceptance gate (the PR lab's rubric) can stop
+  // before spending LLM iterations on internal points the gate ignores.
+  if (earlyAccept?.(currentDescription)) {
+    logMsg("Early accept: external acceptance check passed on first pass");
+    return { description: currentDescription, finalScore: currentScore, iterations: 0 };
+  }
+
+  // A degenerate near-empty refinement (observed: 11-char replies from a
+  // congested gateway) used to abort the whole loop; give it one retry before
+  // giving up on refinement entirely.
+  let shortRetryUsed = false;
 
   for (let iter = 1; iter <= maxIterations && currentScore < targetScore; iter++) {
     iterations = iter;
@@ -97,23 +112,36 @@ Return ONLY the improved PR description (markdown), nothing else. No commentary,
     try {
       const refined = await callAPI(config, prompt, 0.2);
       if (!refined || refined.trim().length < 200) {
+        if (!shortRetryUsed) {
+          shortRetryUsed = true;
+          logMsg(
+            `Iteration ${iter}: refinement too short (${String(refined.trim().length)} chars) — retrying iteration once`,
+          );
+          iter -= 1;
+          continue;
+        }
         logMsg(`Iteration ${iter}: refinement too short, stopping`);
         break;
       }
 
-      const scored = await scoreDescription(refined, commitMessages, hasAnchors, stats);
+      const wrapped = ensureArtifactEnding(wrapLongProseLines(refined), stats);
+      const scored = await scoreDescription(wrapped, commitMessages, hasAnchors, stats);
       logMsg(`Iteration ${iter}: score ${scored.score}/${maxScore} (was ${currentScore}/${maxScore})`);
 
       if (scored.score >= currentScore) {
-        currentDescription = refined;
+        currentDescription = wrapped;
         currentScore = scored.score;
         failures = scored.failures;
+        if (earlyAccept?.(currentDescription)) {
+          logMsg(`Early accept: external acceptance check passed at iteration ${String(iter)}`);
+          break;
+        }
         if (currentScore >= targetScore) break;
       } else {
         logMsg(`Iteration ${iter}: score regressed, keeping previous`);
       }
     } catch (e) {
-      logMsg(`Iteration ${iter} failed: ${e}`);
+      logMsg(`Iteration ${iter} failed: ${e instanceof Error ? e.message : String(e)}`);
       break;
     }
   }

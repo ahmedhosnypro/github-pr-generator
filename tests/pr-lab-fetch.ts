@@ -84,6 +84,26 @@ export async function fetchPrInfo(base: string, token: string): Promise<PrInfo> 
   };
 }
 
+/** Diff straight from the PR endpoint — needs no branch names, so it can run
+ * concurrently with the info fetch (unlike the compare-based fetcher). */
+export async function fetchPrDiffTextDirect(
+  config: ExtensionConfig,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string | null> {
+  const response = await fetch("https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + String(prNumber), {
+    headers: headers(config.githubToken, "application/vnd.github.v3.diff"),
+  });
+  if (response.ok) return response.text();
+  if (response.status === 406) {
+    console.warn(`Diff endpoint reports the PR is too large (>300 files, HTTP 406) — no diff available for prompt`);
+    return null;
+  }
+  console.warn(`PR diff direct fetch failed: ${String(response.status)} — will fall back to compare view`);
+  return null;
+}
+
 export async function fetchPrDiffText(
   config: ExtensionConfig,
   owner: string,

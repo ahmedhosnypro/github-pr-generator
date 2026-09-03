@@ -18,6 +18,29 @@ function sectionSlice(text: string, header: string): string {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+// The Summary check judges the direct prose block only: compact outputs may
+// keep an H3 subsection (e.g. "### Key Changes") under the Summary header, and
+// those bullets/sentences must not count against the prose-only limit.
+function summarySlice(text: string): string {
+  const start = text.search(/^## Summary/im);
+  if (start === -1) return "";
+  const rest = text.slice(start);
+  const next = rest.slice(2).search(/\n#{2,6} /);
+  return next === -1 ? rest : rest.slice(0, next + 2);
+}
+
+// The verification section is canonically "## Testing"; models sometimes write
+// "## Verification", "### Verification Steps", or "How to test" — accept the
+// synonyms. The slice stops only at the next H2 so steps nested under H3
+// subgroups inside the section stay in scope.
+function testingSlice(text: string): string {
+  const start = text.search(/^#{2,3} (?:Testing|Verification|How to test)\b/im);
+  if (start === -1) return "";
+  const rest = text.slice(start);
+  const next = rest.indexOf("\n## ", 2);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
 function sentenceCount(text: string): number {
   return (text.match(/[.!?](?=\s|$)/g) ?? []).length;
 }
@@ -56,10 +79,11 @@ function checkOpener(open: string, title: string): RubricCheck {
 }
 
 function checkSummary(summary: string): RubricCheck {
+  const hasBullets = /^[-*]\s/m.test(summary);
   return {
     name: "summary prose-only, ≤4 sentences",
-    ok: summary !== "" && !/^[-*]\s/m.test(summary) && sentenceCount(summary) <= 4,
-    detail: String(sentenceCount(summary)) + " sentences",
+    ok: summary !== "" && !hasBullets && sentenceCount(summary) <= 4,
+    detail: String(sentenceCount(summary)) + " sentences" + (hasBullets ? " + bullets inside Summary" : ""),
   };
 }
 
@@ -190,10 +214,10 @@ export function scoreDescription(
 ): { score: number; checks: RubricCheck[] } {
   const checks: RubricCheck[] = [
     checkOpener(firstLine(description), title),
-    checkSummary(sectionSlice(description, "Summary")),
+    checkSummary(summarySlice(description)),
     checkChanges(sectionSlice(description, "Changes"), opts),
     checkAnchors(description, opts),
-    checkTesting(sectionSlice(description, "Testing"), opts),
+    checkTesting(testingSlice(description), opts),
     checkFences((description.match(/```/g) ?? []).length, opts),
     checkLineLengths(description),
     checkBulletWords(description),

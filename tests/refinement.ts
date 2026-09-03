@@ -1,4 +1,5 @@
 import { countCoveredCommits, coverageThreshold } from "../src/background/commit-coverage";
+import { ensureArtifactEnding, wrapLongProseLines } from "../src/background/description-normalize";
 import { scoreDescription } from "../src/background/refinement-checks";
 import { expectMatch, getFailures } from "./expect-helpers";
 
@@ -120,6 +121,81 @@ async function testSmallDiffLeniency(): Promise<void> {
     (await scoreDescription(oneFence, [], false, SMALL_STATS)).failures.some((f) => f.check === "fences"),
     true,
   );
+
+  // A "## Verification" section is an accepted synonym for "## Testing".
+  const verified = FULL_DESCRIPTION.replace("## Testing", "## Verification");
+  const verifiedScore = await scoreDescription(verified, [], false, LARGE_STATS);
+  expectMatch(
+    "verification alias satisfies testing checks",
+    verifiedScore.failures.every((f) => f.check !== "testingSteps" && f.check !== "testingFormat"),
+    true,
+  );
+}
+
+// Prose wrapping: long one-line paragraphs are split at sentence boundaries,
+// structural lines are never touched, and an open `code span` blocks a break.
+function testProseWrap(): void {
+  const longLine =
+    "The deployment workflows previously failed to validate the Tailscale network path reliably because they only checked status output. " +
+    "This change adds an active ping check that catches failures before any data is sent over the wire. " +
+    "It also scrubs internal IP addresses from the runner logs before they are printed to the console. " +
+    "Reviewers can now diagnose preflight failures without exposing internal network details.";
+  const wrapped = wrapLongProseLines("## Summary\n\n" + longLine + "\n");
+  const lines = wrapped.split("\n");
+  expectMatch("long prose line is split", lines.length > 3, true);
+  expectMatch(
+    "wrapped pieces stay under the limit",
+    lines.every((l) => l.length <= 400),
+    true,
+  );
+  expectMatch(
+    "wrapping preserves the text (only newlines collapse to spaces)",
+    wrapped.replace(/\n+/g, " ").includes(longLine.trim()),
+    true,
+  );
+
+  const structural = "- a bullet that is long but untouched\n".repeat(12);
+  expectMatch("bullet lines never wrapped", wrapLongProseLines(structural), structural);
+
+  const fenced = "```bash\n" + "echo ".repeat(200) + "\n```\n";
+  expectMatch("fenced blocks never wrapped", wrapLongProseLines(fenced), fenced);
+
+  const openSpan =
+    "Intro with an open `code span that keeps going and going and stays open through many words. ".repeat(3) +
+    "Second sentence closes the span` here. " +
+    "Tail sentence packs the paragraph way past the limit now. ".repeat(6);
+  const spanWrapped = wrapLongProseLines(openSpan);
+  expectMatch(
+    "no break inside an open code span",
+    spanWrapped.split("\n").some((l) => (l.match(/`/g) ?? []).length % 2 === 1 && l.length <= 390),
+    false,
+  );
+
+  const megaSentence = "word ".repeat(300).trim() + ".";
+  expectMatch("a single long sentence is left for refinement", wrapLongProseLines(megaSentence), megaSentence);
+}
+
+// Artifact ending: a scope-accounting line is appended only when the draft
+// lacks any accepted closing artifact, and the ending check then passes.
+async function testArtifactEnding(): Promise<void> {
+  const stats = { files: 3, additions: 10, deletions: 2 };
+  const badEnding = FULL_DESCRIPTION.replace("\nScope: 3 files, +10/-2", "");
+  const fixed = ensureArtifactEnding(badEnding, stats);
+  expectMatch("missing artifact ending gains a scope line", fixed.endsWith("Scope: 3 files, +10/-2.\n"), true);
+  expectMatch(
+    "appended scope line satisfies the ending check",
+    (await scoreDescription(fixed, [], false, stats)).failures.every((f) => f.check !== "ending"),
+    true,
+  );
+
+  const alreadyGood = FULL_DESCRIPTION;
+  expectMatch("existing artifact ending kept verbatim", ensureArtifactEnding(alreadyGood, stats), alreadyGood);
+  expectMatch("no stats, no append", ensureArtifactEnding(badEnding, null), badEnding);
+  expectMatch(
+    "zero-file stats, no append",
+    ensureArtifactEnding(badEnding, { files: 0, additions: 0, deletions: 0 }),
+    badEnding,
+  );
 }
 
 // Commit coverage: word-match semantics + the scaled threshold curve.
@@ -146,6 +222,8 @@ async function main(): Promise<void> {
   await testAnchorGating();
   await testProportionalSize();
   await testSmallDiffLeniency();
+  testProseWrap();
+  await testArtifactEnding();
   testCommitCoverage();
 
   const failures = getFailures();

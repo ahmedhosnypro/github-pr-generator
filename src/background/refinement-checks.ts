@@ -11,8 +11,14 @@ interface CheckResult {
 
 type Check = (description: string) => CheckResult | null;
 
+// The Summary's own prose block: ends at the next heading of any depth, so
+// compact outputs that keep a "### Key Changes" subsection under the Summary
+// header are judged by their prose sentences only — the bullets belong to the
+// subsection, not to the opener.
+const summarySliceRe = /^## Summary\n([\s\S]*?)(?=\n#{2,6} |$(?![\s\S]))/m;
+
 function checkOpener(description: string): CheckResult | null {
-  const summaryMatch = description.match(/^## Summary\n([\s\S]*?)(?=\n## |$(?![\s\S]))/m);
+  const summaryMatch = description.match(summarySliceRe);
   if (!summaryMatch?.[1]) {
     return { score: 0, failures: [{ check: "opener", detail: "no Summary section" }] };
   }
@@ -24,13 +30,24 @@ function checkOpener(description: string): CheckResult | null {
 }
 
 function checkSummarySentences(description: string): CheckResult | null {
-  const summaryMatch2 = description.match(/^## Summary\n([\s\S]*?)(?=\n## |$(?![\s\S]))/m);
+  const summaryMatch2 = description.match(summarySliceRe);
   if (!summaryMatch2?.[1]) {
     return { score: 0, failures: [{ check: "summarySentences", detail: "no Summary section" }] };
   }
   const sentences = summaryMatch2[1].split(/(?<=[.!?])\s+/).filter(Boolean);
-  if (sentences.length > 4 || sentences.length === 0 || /^[-*]\s/m.test(summaryMatch2[1])) {
-    return { score: 0, failures: [{ check: "summarySentences", detail: `${sentences.length} sentences` }] };
+  const hasBullets = /^[-*]\s/m.test(summaryMatch2[1]);
+  if (sentences.length > 4 || sentences.length === 0 || hasBullets) {
+    return {
+      score: 0,
+      failures: [
+        {
+          check: "summarySentences",
+          detail:
+            `${sentences.length} sentences` +
+            (hasBullets ? " + bullet lines inside the Summary section (move them under their own heading)" : ""),
+        },
+      ],
+    };
   }
   return null;
 }
@@ -74,8 +91,14 @@ function checkAnchors(description: string): CheckResult | null {
   return failures.length > 0 ? { score: 0, failures } : null;
 }
 
+// The verification section is canonically "## Testing"; models sometimes write
+// "## Verification" (or an "### Verification Steps" subsection) or "How to
+// test" — accept the synonyms. Slicing still stops at the next H2 only, so
+// numbered steps nested under H3 subgroups inside the section stay in scope.
+const TESTING_SECTION_RE = /^#{2,3} (?:Testing|Verification|How to test)\s*\n([\s\S]*?)(?=\n## |$(?![\s\S]))/m;
+
 function checkTestingSteps(description: string, stats: PRStats | null): CheckResult | null {
-  const testingMatch = description.match(/^## Testing\n([\s\S]*?)(?=\n## |$(?![\s\S]))/m);
+  const testingMatch = description.match(TESTING_SECTION_RE);
   if (!testingMatch?.[1]) {
     if (isSmallDiff(stats)) return null;
     return { score: 0, failures: [{ check: "testingSteps", detail: "no Testing section" }] };
@@ -89,7 +112,7 @@ function checkTestingSteps(description: string, stats: PRStats | null): CheckRes
 }
 
 function checkTestingFormat(description: string, stats: PRStats | null): CheckResult | null {
-  const testingMatch2 = description.match(/^## Testing\n([\s\S]*?)(?=\n## |$(?![\s\S]))/m);
+  const testingMatch2 = description.match(TESTING_SECTION_RE);
   if (!testingMatch2?.[1]) {
     if (isSmallDiff(stats)) return null;
     return { score: 0, failures: [{ check: "testingFormat", detail: "no Testing section" }] };
@@ -153,13 +176,18 @@ function checkBulletWords(description: string): CheckResult | null {
   return null;
 }
 
+// Accepted closing artifacts: verdict line, issue link, honest "Not verified",
+// a verdict table row, or scope accounting. Shared with the normalizer in
+// description-normalize.ts so normalization and checking can never drift.
+export const ARTIFACT_ENDING_RE = /Closes #|Fixes #|Not verified|verdict|\|[-—\s|]+\||scope/i;
+
 function checkEnding(description: string): CheckResult | null {
   const tail = description
     .split("\n")
     .filter((l) => l.trim())
     .slice(-3)
     .join(" ");
-  if (!/Closes #|Fixes #|Not verified|verdict|\|[-—\s|]+\||scope/i.test(tail)) {
+  if (!ARTIFACT_ENDING_RE.test(tail)) {
     return {
       score: 0,
       failures: [

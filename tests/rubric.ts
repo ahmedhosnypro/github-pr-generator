@@ -65,6 +65,11 @@ async function main(): Promise<void> {
   const invented = scoreDescription(GOOD, "fix: x", ["fix: the race"], { expectAnchors: false });
   expectMatch("invented anchors rejected when prompt had none", invented.score < 10, true);
 
+  // A "Verification" section is a synonym for "## Testing" — steps there count.
+  const verificationAlias = GOOD.replace("## Testing", "## Verification");
+  const aliasScored = scoreDescription(verificationAlias, "fix: x", ["fix: the race"]);
+  expectMatch("verification alias satisfies testing check", aliasScored.score, 10);
+
   const failures = getFailures();
   if (failures > 0) {
     console.log(`\n❌ ${String(failures)} check(s) FAILED`);

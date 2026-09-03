@@ -14,6 +14,8 @@ export interface Config {
   apiEndpoint?: string;
   apiKey?: string;
   model?: string;
+  labModel?: string;
+  labEffort?: string;
 }
 
 export interface GhCommit {
