@@ -149,6 +149,9 @@ function testLeadingHeadingIsNotATitle(): void {
   expectIncludes("outer fence stripped from description-only body", fenced.description, "## Description");
   const unknownHeading = parseCombinedResponse("## What changed\nsome body");
   expectMatch("unknown leading heading still parses as a title", unknownHeading.title, "What changed");
+  const titledHeading = parseCombinedResponse("## Summary of my work\n\nBody below.");
+  expectMatch("heading with trailing title text is a real title", titledHeading.title, "Summary of my work");
+  expectIncludes("body after a real heading-title kept", titledHeading.description, "Body below.");
 }
 
 function testOverviewLinePlacement(): void {

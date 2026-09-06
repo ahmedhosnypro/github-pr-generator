@@ -76,6 +76,24 @@ function testSplitLeadingSectionHeading(): void {
   expectMatch("other known sections stay title-less", splitStreamedCombined("## Testing\n1. Run the suite").title, "");
   expectMatch("single-hash heading guarded", splitStreamedCombined("# Walkthrough\nsteps").title, "");
   expectMatch("partial title chunk after heading start guarded", splitStreamedCombined("## Summary").title, "");
+  // Token-split streams: an incomplete section word must never reach the
+  // title field — once it completes, an already-written fragment is never
+  // reverted.
+  expectMatch("token-split heading prefix held", splitStreamedCombined("## Wal").title, "");
+  expectMatch("short token-split prefix held", splitStreamedCombined("## T").title, "");
+  expectMatch("prefix completes to empty title", splitStreamedCombined("## Walkthrough\nBody.").title, "");
+  expectMatch(
+    "completed heading carries the whole body",
+    splitStreamedCombined("## Walkthrough\nBody.").description,
+    "## Walkthrough\nBody.",
+  );
+  expectMatch("unknown prefix streams as title", splitStreamedCombined("## Custom").title, "Custom");
+  expectMatch("extended section word streams as title", splitStreamedCombined("## Summaries").title, "Summaries");
+  expectMatch(
+    "real multiword title after hashes stays surveyable",
+    splitStreamedCombined("## Summary of my work").title,
+    "Summary of my work",
+  );
   expectMatch(
     "fence-wrapped body-only stream guarded",
     splitStreamedCombined("```markdown\n## Description\nwrapped body").title,
