@@ -41,10 +41,12 @@ function assertDistFresh(): void {
 
 async function main(): Promise<void> {
   assertDistFresh();
+  // Launch headed (`headless: false`) — adding `--headless=new` here would fight
+  // the option; extension loading works in headed Chromium without extra flags.
   const context: BrowserContext = await chromium.launchPersistentContext("scratch/.e2e-profile", {
     headless: false,
     channel: "chromium",
-    args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`, "--headless=new"],
+    args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`],
   });
   try {
     // Resolve the extension id from the service worker target.

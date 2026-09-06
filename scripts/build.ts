@@ -24,6 +24,17 @@ if (missingIcons.length > 0) {
   }
 }
 
+// The extension's version must always equal the package version — drift ships a
+// mislabeled build, so fail fast before bundling (see scripts/check-version-sync.ts).
+const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as { version?: string };
+const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version?: string };
+if (typeof manifest.version !== "string" || manifest.version !== pkg.version) {
+  console.error(
+    `version drift: manifest.json is ${manifest.version ?? "(missing)"} but package.json is ${pkg.version ?? "(missing)"} — bump both together`,
+  );
+  process.exit(1);
+}
+
 // Start from a clean slate so stale artifacts from previous builds never linger in dist/.
 await rm(dist, { recursive: true, force: true });
 
