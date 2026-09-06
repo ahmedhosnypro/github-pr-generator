@@ -12,6 +12,7 @@ import { expectMatch, getFailures } from "./expect-helpers";
 const { BTN_MERGE_DESC_ID, BTN_MERGE_TITLE_ID } = await import("../src/content/constants");
 const { getButton } = await import("../src/content/dom");
 const { injectMergeButtons } = await import("../src/content/merge-buttons");
+const { findMergeDescTextarea, probeMergeDialogFields } = await import("../src/content/merge-fields");
 const { handleGenerateMergeDescription, handleGenerateMergeTitle } = await import("../src/content/merge-generate");
 
 const PR_URL = "https://github.com/o/r/pull/42";
@@ -260,9 +261,31 @@ async function testMergeErrorPaths(): Promise<void> {
   expectMatch("no buttons: no toast", toastState(), null);
 }
 
+function testMergeFieldProbe(): void {
+  console.log("--- merge-fields.ts quiet probe + finder priority ---");
+  const page = buildMergeDialogPage();
+  const probe = probeMergeDialogFields();
+  expectMatch("probe finds title via live value", probe.hasTitle, true);
+  expectMatch("probe ignores locale-fragile placeholder copy", probe.hasDescription, false);
+  page.descTextarea.setAttribute("class", "prc-Textarea-TextArea hash");
+  expectMatch("probe finds desc via prc class", probeMergeDialogFields().hasDescription, true);
+
+  // The interactive finder prefers the stable Primer class over placeholder
+  // copy elsewhere on the page.
+  resetPage(PR_URL).appendChild(h("textarea", { placeholder: "Add an optional extended description…" }));
+  const prc = h("textarea", { class: "prc-Textarea-TextArea xyz" });
+  document.body.appendChild(prc as unknown as Node);
+  expectMatch("interactive finder prefers prc over placeholder", findMergeDescTextarea(), prc);
+  resetPage(PR_URL);
+  const emptyProbe = probeMergeDialogFields();
+  expectMatch("empty page probe: no title", emptyProbe.hasTitle, false);
+  expectMatch("empty page probe: no description", emptyProbe.hasDescription, false);
+}
+
 console.log("=== Content Script (merge dialog) Tests ===\n");
 testInjectMergeButtons();
 testInjectMergeButtonsReactDialog();
+testMergeFieldProbe();
 await testMergeTitleSuccess();
 await testMergeTitleEmptyResult();
 await testMergeDescriptionSuccess();

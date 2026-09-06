@@ -1,3 +1,5 @@
+import { probeMergeDialogFields } from "./merge-fields";
+
 export function isPRCreationPage(): boolean {
   const url = window.location.href;
   const hasTitle = Boolean(document.querySelector('input[name="pull_request[title]"]'));
@@ -21,14 +23,13 @@ export function isMergeConfirmationPage(): boolean {
   if (!url.includes("github.com")) return false;
   if (!/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(url)) return false;
 
-  // GitHub's merge dialog uses React components with auto-generated IDs
-  // Look for the confirm merge container or the input/textarea patterns
-  const hasConfirmMerge = Boolean(document.querySelector('[class*="ConfirmMerge"]'));
-  const hasMergeInput = Boolean(
-    document.querySelector('input[data-component="input"][type="text"][value*="Merge pull request"]'),
-  );
-  const hasMergeTextarea = Boolean(
-    document.querySelector('textarea[class*="prc-Textarea-TextArea"], textarea[placeholder*="extended description"]'),
-  );
-  return hasConfirmMerge || (hasMergeInput && hasMergeTextarea);
+  // Primary: the merge dialog's wrapper class (minified; matched
+  // hash-agnostically because the suffix rotates with each Primer release).
+  if (document.querySelector('[class*="ConfirmMerge"]')) return true;
+
+  // Fallback: live scan of the dialog fields. Reads the current .value
+  // property (React hydration drops the original value= attribute) and
+  // avoids locale-dependent UI copy such as placeholder text.
+  const probe = probeMergeDialogFields();
+  return probe.hasTitle && probe.hasDescription;
 }

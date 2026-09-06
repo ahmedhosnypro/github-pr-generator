@@ -32,6 +32,21 @@ expectMatch("title-only kept as title", titleOnly.title, "fix: x");
 const fenced = splitStreamedCombined("```markdown\nfix: fenced\n\the body");
 expectMatch("leading fence dropped", fenced.title, "fix: fenced");
 
+// Only the first blank line splits title from description; later blank lines
+// stay inside the description body.
+const multiBreak = splitStreamedCombined("feat: x\n\npara one\n\npara two");
+expectMatch("first blank line splits", multiBreak.title, "feat: x");
+expectMatch("later blank lines stay in description", multiBreak.description, "para one\n\npara two");
+
+// Fence with a language tag and a full title+body payload.
+const fencedFull = splitStreamedCombined("```md\nfeat: fenced title\n\nfenced body");
+expectMatch("fenced full title", fencedFull.title, "feat: fenced title");
+expectMatch("fenced full description", fencedFull.description, "fenced body");
+
+// A mid-stream partial where the title itself is still wrapped in quotes.
+const partialQuoted = splitStreamedCombined('"feat: partial');
+expectMatch("partial quoted title cleaned", partialQuoted.title, "feat: partial");
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

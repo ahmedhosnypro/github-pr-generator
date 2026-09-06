@@ -81,6 +81,11 @@ function fillPRFields(title: string, description: string): void {
     );
     if (writeTab) {
       writeTab.click();
+    } else {
+      // React editor (or Write already selected) has no classic write-tab:
+      // the synthetic input event from setReactValue above is what React
+      // listens to, so no tab switch is needed.
+      log("info", "No write-tab to activate (React editor or write already selected)");
     }
   } else {
     log("error", "Description textarea not found!");
