@@ -312,11 +312,13 @@ async function callAPIAttempt(
   let content: string;
   let fromStream: boolean;
   if (contentType.includes("event-stream")) {
-    content = await readStreamedCompletion(response, onChunk, watchdog, signal);
+    content = await readStreamedCompletion(response, onChunk, watchdog, signal, noContentTimeoutMs(prompt.length));
     fromStream = true;
   } else {
     // Watchdog covers a body download that never completes; aborting the
-    // fetch cancels response.text() consumption as well.
+    // fetch cancels response.text() consumption as well. A plain body has no
+    // incremental progress signal, so the size of the prompt does not extend
+    // this 60s window the way it extends the streaming no-content budget.
     const json = parseJsonResponseBody(await withStallWatchdog(response.text(), watchdog));
     content = json.choices?.[0]?.message?.content || "";
     fromStream = false;
