@@ -10,11 +10,27 @@ import { createSSEParser } from "./sse";
 // out. Abort when no response/token arrives within this window.
 export const STREAM_STALL_TIMEOUT_MS = 60_000;
 
-// The stall watchdog resets on every operation, so a drip-feeding server (one
-// token every few seconds, forever) would stream indefinitely without ever
-// tripping it. This absolute budget caps the whole call — retries and backoff
-// sleeps included — no matter how steadily chunks trickle in.
-export const OVERALL_CALL_TIMEOUT_MS = 5 * 60_000;
+// A budget for *content progress*, not call duration. The failure shapes:
+//  - no response at all (headers never arrive) → the stall watchdog above
+//  - acknowledged but contentless: a keepalive-only drip, a stream that never
+//    starts producing tokens, or one that goes content-silent mid-way → this
+//    budget; abort when nothing but empty frames has arrived for Ns
+//  - a healthy but slow stream (content keeps trickling) → NO timeout: real
+//    tokens may take as long as the model needs. Measured motivation: a 120k-
+//    char prompt needs ~324s end-to-end on a congested 550B gateway route,
+//    which any fixed overall deadline (vs the old flat 300s) killed moments
+//    before completion even though content was flowing the whole time.
+export const NO_CONTENT_TIMEOUT_BASE_MS = 5 * 60_000;
+
+// The no-content budget scales with prompt size: a near-cap prompt spends
+// minutes in prefill (keepalives only) on slow hosted models before the first
+// token. The 10-minute ceiling still bounds a contentless drip.
+const MS_PER_PROMPT_CHAR = 4;
+const NO_CONTENT_TIMEOUT_MAX_MS = 10 * 60_000;
+
+export function noContentTimeoutMs(promptChars: number): number {
+  return Math.min(NO_CONTENT_TIMEOUT_MAX_MS, Math.max(NO_CONTENT_TIMEOUT_BASE_MS, promptChars * MS_PER_PROMPT_CHAR));
+}
 
 // When max_tokens is omitted the provider applies its own default (often
 // small), so long template fills get cut off mid-output and the truncated
@@ -27,8 +43,8 @@ function stallError(): Error {
   return new Error("LLM stream stalled: no tokens for " + String(STREAM_STALL_TIMEOUT_MS / 1000) + "s");
 }
 
-function deadlineError(): Error {
-  return new Error("LLM call exceeded overall deadline of " + String(OVERALL_CALL_TIMEOUT_MS / 1000) + "s");
+function noContentError(budgetMs: number): Error {
+  return new Error("LLM stream produced no content for " + String(Math.round(budgetMs / 1000)) + "s");
 }
 
 function isAbortException(err: unknown): boolean {
@@ -138,50 +154,71 @@ async function readStreamedCompletion(
   onChunk: ((delta: string) => void) | undefined,
   watchdog: AbortController,
   signal: AbortSignal,
+  contentBudgetMs: number,
 ): Promise<string> {
   const parser = createSSEParser();
   const decoder = new TextDecoder();
   let aggregated = "";
+  // Content-progress timer: unlike the stall watchdog (which any bytes — even
+  // an empty keepalive frame — satisfy), this only resets when a real content
+  // delta arrives. A keepalive-only drip or a stream that never starts is
+  // killed once the budget elapses; a stream that keeps producing tokens gets
+  // unlimited total time no matter how slowly.
+  let contentTimer: ReturnType<typeof setTimeout> | undefined;
+  const armContentTimer = (): void => {
+    clearTimeout(contentTimer);
+    contentTimer = setTimeout(() => {
+      watchdog.abort(noContentError(contentBudgetMs));
+    }, contentBudgetMs);
+  };
+  armContentTimer();
   const deliver = (deltas: string[]): void => {
+    let gotContent = false;
     for (const delta of deltas) {
+      if (delta) gotContent = true;
       aggregated += delta;
       onChunk?.(delta);
     }
+    if (gotContent) armContentTimer();
   };
 
-  const body = response.body;
-  if (body) {
-    const reader = body.getReader();
-    for (;;) {
-      let read: Awaited<ReturnType<typeof reader.read>>;
-      try {
-        // oxlint-disable-next-line no-await-in-loop -- a stream reader is sequential by nature: chunks must be read in order
-        read = await withStallWatchdog(reader.read(), watchdog);
-      } catch (readErr) {
-        if (signal.aborted) {
-          // Watchdog stall or caller cancel aborted the fetch mid-stream.
-          const reason = abortErrorFrom(signal);
-          logMsg("Stream read aborted: " + reason.message);
-          throw reason;
+  try {
+    const body = response.body;
+    if (body) {
+      const reader = body.getReader();
+      for (;;) {
+        let read: Awaited<ReturnType<typeof reader.read>>;
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- a stream reader is sequential by nature: chunks must be read in order
+          read = await withStallWatchdog(reader.read(), watchdog);
+        } catch (readErr) {
+          if (signal.aborted) {
+            // Watchdog stall, content timeout, or caller cancel aborted the fetch mid-stream.
+            const reason = abortErrorFrom(signal);
+            logMsg("Stream read aborted: " + reason.message);
+            throw reason;
+          }
+          throw readErr;
         }
-        throw readErr;
+        if (read.done) break;
+        deliver(parser.push(decoder.decode(read.value, { stream: true })));
       }
-      if (read.done) break;
-      deliver(parser.push(decoder.decode(read.value, { stream: true })));
+      deliver(parser.push(decoder.decode()));
     }
-    deliver(parser.push(decoder.decode()));
-  }
-  deliver(parser.flush());
+    deliver(parser.flush());
 
-  if (!aggregated && parser.getSnapshot()) {
-    // Server answered SSE but with full message content instead of deltas (e.g. NVIDIA NIM).
-    aggregated = parser.getSnapshot();
-    onChunk?.(aggregated);
+    if (!aggregated && parser.getSnapshot()) {
+      // Server answered SSE but with full message content instead of deltas (e.g. NVIDIA NIM).
+      aggregated = parser.getSnapshot();
+      onChunk?.(aggregated);
+    }
+    if (!aggregated) {
+      logMsg("SSE: no content aggregated from stream");
+    }
+    return aggregated;
+  } finally {
+    clearTimeout(contentTimer);
   }
-  if (!aggregated) {
-    logMsg("SSE: no content aggregated from stream");
-  }
-  return aggregated;
 }
 
 /** Fallback for servers that ignored stream:true and sent a plain (or unlabeled SSE) body. */
@@ -225,27 +262,11 @@ export async function callAPI(
   allowTransientRetry = true,
   callerSignal?: AbortSignal,
 ): Promise<string> {
-  // Absolute deadline spanning retries and backoff sleeps: unlike the
-  // per-operation stall watchdog, this never resets, so a drip-feed stream
-  // cannot keep the call alive forever.
-  const overall = new AbortController();
-  const deadline = setTimeout(() => {
-    overall.abort(deadlineError());
-  }, OVERALL_CALL_TIMEOUT_MS);
-  try {
-    return await callAPIAttempt(
-      config,
-      prompt,
-      temperature,
-      onChunk,
-      allowEmptyRetry,
-      allowTransientRetry,
-      callerSignal,
-      overall.signal,
-    );
-  } finally {
-    clearTimeout(deadline);
-  }
+  // No absolute call-length deadline: timeouts are content-based. The stall
+  // watchdog covers no-response/no-bytes, the no-content budget inside
+  // readStreamedCompletion covers acknowledged-but-contentless streams, and a
+  // stream that keeps producing tokens may run as long as it needs.
+  return callAPIAttempt(config, prompt, temperature, onChunk, allowEmptyRetry, allowTransientRetry, callerSignal);
 }
 
 async function callAPIAttempt(
@@ -256,13 +277,11 @@ async function callAPIAttempt(
   allowEmptyRetry: boolean,
   allowTransientRetry: boolean,
   callerSignal: AbortSignal | undefined,
-  overall: AbortSignal,
 ): Promise<string> {
   const watchdog = new AbortController();
-  // Caller cancel, the overall deadline and the stall watchdog share one
-  // signal toward fetch; AbortSignal.any forwards whichever aborts first,
-  // with its reason.
-  const signal = AbortSignal.any(callerSignal ? [callerSignal, watchdog.signal, overall] : [watchdog.signal, overall]);
+  // Caller cancel and the stall watchdog share one signal toward fetch;
+  // AbortSignal.any forwards whichever aborts first, with its reason.
+  const signal = AbortSignal.any(callerSignal ? [callerSignal, watchdog.signal] : [watchdog.signal]);
   if (signal.aborted) throw abortErrorFrom(signal);
   // Normalize "https://host/v1/" → "https://host/v1/chat/completions"; the popup
   // test path strips trailing slashes too, so a "//chat" URL would only ever hit
@@ -302,7 +321,7 @@ async function callAPIAttempt(
       if (transient) {
         logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
         await sleepOrAbort(2000, signal);
-        return callAPIAttempt(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal, overall);
+        return callAPIAttempt(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal);
       }
     }
     throwForErrorResponse(response, errBody);
@@ -312,11 +331,13 @@ async function callAPIAttempt(
   let content: string;
   let fromStream: boolean;
   if (contentType.includes("event-stream")) {
-    content = await readStreamedCompletion(response, onChunk, watchdog, signal);
+    content = await readStreamedCompletion(response, onChunk, watchdog, signal, noContentTimeoutMs(prompt.length));
     fromStream = true;
   } else {
     // Watchdog covers a body download that never completes; aborting the
-    // fetch cancels response.text() consumption as well.
+    // fetch cancels response.text() consumption as well. A plain body has no
+    // incremental progress signal, so the size of the prompt does not extend
+    // this 60s window the way it extends the streaming no-content budget.
     const json = parseJsonResponseBody(await withStallWatchdog(response.text(), watchdog));
     content = json.choices?.[0]?.message?.content || "";
     fromStream = false;
@@ -328,7 +349,7 @@ async function callAPIAttempt(
     if (allowEmptyRetry) {
       logMsg("No content in API response — retrying once");
       await sleepOrAbort(1000, signal);
-      return callAPIAttempt(config, prompt, temperature, onChunk, false, true, callerSignal, overall);
+      return callAPIAttempt(config, prompt, temperature, onChunk, false, true, callerSignal);
     }
     logMsg("No content in API response");
     throw new Error("No content in API response");
