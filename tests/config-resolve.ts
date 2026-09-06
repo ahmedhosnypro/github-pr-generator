@@ -257,6 +257,41 @@ console.log("=== Config Resolve Tests ===\n");
   expectMatch("fractional diffMaxBytes truncates", cfg.diffMaxBytes, 42000);
 }
 
+// --- validateConfig: plain-HTTP endpoints to non-localhost hosts log a warning
+// --- (the Bearer key would travel in cleartext) but do not block.
+{
+  moduleCounter += 1;
+  const mod = (await import(`../src/background/config.ts?v=${String(moduleCounter)}`)) as ConfigModule;
+  const base: ExtensionConfig = {
+    apiEndpoint: "https://api.example.com/v1",
+    apiKey: "sk-test-key",
+    model: "probe-model",
+    githubToken: "",
+    thinkingEffort: "default",
+    diffEnabled: true,
+    diffMaxLines: 3000,
+    diffMaxBytes: 100_000,
+  };
+  const captureWarn = (endpoint: string): { result: string | null; warned: boolean } => {
+    const original = console.log;
+    const lines: string[] = [];
+    console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+    try {
+      const result = mod.validateConfig({ ...base, apiEndpoint: endpoint });
+      return { result, warned: lines.some((line) => line.includes("WARNING") && line.includes("plain HTTP")) };
+    } finally {
+      console.log = original;
+    }
+  };
+  const remote = captureWarn("http://api.example.com/v1");
+  expectMatch("http non-localhost does not block", remote.result, null);
+  expectMatch("http non-localhost logs cleartext warning", remote.warned, true);
+  expectMatch("https non-localhost logs no warning", captureWarn("https://api.example.com/v1").warned, false);
+  expectMatch("http localhost logs no warning", captureWarn("http://localhost:20128/v1").warned, false);
+  expectMatch("http 127.x logs no warning", captureWarn("http://127.0.0.1:8080/v1").warned, false);
+  expectMatch("http [::1] logs no warning", captureWarn("http://[::1]:8080/v1").warned, false);
+}
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

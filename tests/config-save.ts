@@ -37,6 +37,21 @@ expectMatch("empty payload is empty update", Object.keys(buildStorageUpdate({}))
 const ws = buildStorageUpdate({ diffMaxLines: "   " });
 expectMatch("whitespace-only numeric dropped", "diffMaxLines" in ws, false);
 
+// Out-of-range limits are clamped at write time with the shared clamp
+// (src/background/config-save.ts), matching what the read side applies.
+const tooLow = buildStorageUpdate({ diffMaxLines: 5, diffMaxBytes: -1 });
+expectMatch("diffMaxLines below min clamps to 100", tooLow.diffMaxLines, 100);
+expectMatch("negative diffMaxBytes clamps to 10000", tooLow.diffMaxBytes, 10000);
+const tooHigh = buildStorageUpdate({ diffMaxLines: 999999, diffMaxBytes: 99999999 });
+expectMatch("diffMaxLines above max clamps to 10000", tooHigh.diffMaxLines, 10_000);
+expectMatch("diffMaxBytes above max clamps to 500000", tooHigh.diffMaxBytes, 500_000);
+const fractional = buildStorageUpdate({ diffMaxLines: 1234.9, diffMaxBytes: "42000.7" });
+expectMatch("fractional diffMaxLines truncates", fractional.diffMaxLines, 1234);
+expectMatch("fractional string diffMaxBytes parses and truncates", fractional.diffMaxBytes, 42000);
+const inRange = buildStorageUpdate({ diffMaxLines: 500, diffMaxBytes: 250000 });
+expectMatch("in-range diffMaxLines kept", inRange.diffMaxLines, 500);
+expectMatch("in-range diffMaxBytes kept", inRange.diffMaxBytes, 250000);
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

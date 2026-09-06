@@ -29,7 +29,12 @@ import {
   toThinkingEffort,
   updateDiffConditionalVisibility,
 } from "./ui";
-import { resetEndpointFieldError, showEndpointPermissionError, validateEndpoint } from "./validate";
+import {
+  autoValidateEndpoint,
+  resetEndpointFieldError,
+  showEndpointPermissionError,
+  validateEndpoint,
+} from "./validate";
 
 async function validateWithPermission(): Promise<void> {
   const granted = await requestEndpointPermission(endpointInput.value.trim());
@@ -44,14 +49,17 @@ async function testApiWithPermission(): Promise<void> {
 }
 
 function wireAutosaveField(key: keyof SaveConfigData, el: HTMLInputElement): void {
-  el.addEventListener("input", () => {
-    persistField(key, el.value);
-  });
+  // One listener per control: a checkbox's change event carries the boolean,
+  // a second input listener would queue the same value twice per toggle.
   if (el.type === "checkbox") {
     el.addEventListener("change", () => {
       persistField(key, el.checked);
     });
+    return;
   }
+  el.addEventListener("input", () => {
+    persistField(key, el.value);
+  });
 }
 
 function wireAutosave(): void {
@@ -104,6 +112,9 @@ function wireButtons(): void {
   testGitHubBtn.addEventListener("click", testGitHub);
   themeToggle.addEventListener("click", toggleTheme);
   endpointInput.addEventListener("input", resetEndpointFieldError);
+  // Leaving the endpoint field re-probes reachability (keyless); skipped
+  // automatically when the endpoint URL is invalid or permission is absent.
+  endpointInput.addEventListener("blur", autoValidateEndpoint);
 }
 
 wireAutosave();

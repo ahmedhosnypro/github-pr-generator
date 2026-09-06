@@ -1,6 +1,5 @@
 import {
   apiEndpointError,
-  apiKeyInput,
   connectionStatus,
   connectionStatusText,
   endpointInput,
@@ -83,16 +82,24 @@ export function resetEndpointFieldError(): void {
   apiEndpointError.classList.remove("visible");
 }
 
-function handleValidateResponse(response: Response): void {
+function handleValidateResponse(response: Response, insecure: boolean): void {
   if (response.ok) {
-    const insecure = isInsecureHttpEndpoint(endpointInput.value);
     clearEndpointError(
       "connected",
-      insecure ? "Connected (warning: insecure HTTP, API key sent in cleartext)" : "Connected",
+      insecure ? "Connected (warning: insecure HTTP, API key would be sent in cleartext)" : "Connected",
     );
-  } else {
-    showEndpointError("Error: " + String(response.status), "Server returned " + String(response.status));
+    return;
   }
+  // The probe sends no credentials, so 401/403 mean the host answered: the
+  // endpoint is reachable and only auth stands between it and a green state.
+  if (response.status === 401 || response.status === 403) {
+    clearEndpointError(
+      "connected",
+      "Reachable — key not checked (" + String(response.status) + "). Use Test API to verify the key.",
+    );
+    return;
+  }
+  showEndpointError("Error: " + String(response.status), "Server returned " + String(response.status));
 }
 
 /** Shown when the extension lacks host permission for the configured endpoint. */
@@ -132,19 +139,33 @@ export function validateEndpoint(): void {
   void runValidateAttempt(seq, url);
 }
 
+/**
+ * Automatic validation (popup open, field blur): a reachability probe only.
+ * Two hard rules — no user gesture exists here, so chrome.permissions.request
+ * is impossible; skip the check entirely when host permission is absent, and
+ * never send the API key automatically. Only the explicit Test buttons do.
+ */
+export function autoValidateEndpoint(): void {
+  const url = endpointInput.value.trim();
+  if (!url || parseUrlOrNull(url) === null) return;
+  void hasEndpointPermission(url).then((granted) => {
+    if (granted) validateEndpoint();
+    return undefined;
+  });
+}
+
 async function runValidateAttempt(seq: number, url: string): Promise<void> {
   try {
+    // Keyless reachability probe: the Validate button and the automatic checks
+    // only ask "does the server answer?" — the API key leaves the popup solely
+    // via the explicit Test API button.
     const response = await fetch(stripTrailingSlashes(url) + "/models", {
       method: "GET",
-      headers: {
-        Authorization: "Bearer " + apiKeyInput.value.trim(),
-        "Content-Type": "application/json",
-      },
       mode: "cors",
       signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
     });
     if (seq !== validationSeq) return; // a newer attempt superseded this one
-    handleValidateResponse(response);
+    handleValidateResponse(response, isInsecureHttpEndpoint(url));
   } catch (err) {
     if (seq !== validationSeq) return;
     await handleValidateError(err);

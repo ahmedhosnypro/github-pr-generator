@@ -1,5 +1,6 @@
 import { resolveConfig } from "../config-resolve";
 import type { ExtensionConfig, FileConfig, StoredConfig } from "../types";
+import { clampDiffLimit } from "./config-save";
 import { errorMessage, logMsg } from "./log";
 
 const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
@@ -14,24 +15,6 @@ const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
 ];
 
 let FILE_CONFIG: FileConfig | null = null;
-
-// Keep these bounds in sync with the popup-side clamp in src/popup/save.ts.
-const DIFF_LIMITS = {
-  diffMaxLines: { min: 100, max: 10_000, fallback: 3000 },
-  diffMaxBytes: { min: 10_000, max: 500_000, fallback: 100_000 },
-} as const;
-
-/**
- * Defensive clamp for resolved diff limits: stored or file values can be
- * negative (which silently empties every diff), absurdly large, fractional,
- * or non-numeric via a hand-edited config.local.json.
- */
-function clampDiffLimit(key: keyof typeof DIFF_LIMITS, value: number): number {
-  const { min, max, fallback } = DIFF_LIMITS[key];
-  const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Math.trunc(n)));
-}
 
 async function loadFileConfig(): Promise<void> {
   try {
@@ -120,7 +103,27 @@ export function validateConfig(config: ExtensionConfig): string | null {
     return "API endpoint is not a valid URL: " + config.apiEndpoint;
   }
 
+  // Cleartext HTTP is fine for loopback dev servers, but anywhere else the
+  // Bearer token travels unencrypted — warn (the popup shows the same warning
+  // in its UI); not a blocking error since the user may accept the risk.
+  const endpointUrl = new URL(config.apiEndpoint);
+  if (endpointUrl.protocol === "http:" && !isLoopbackHostname(endpointUrl.hostname)) {
+    logMsg(
+      "WARNING: API endpoint uses plain HTTP to a non-localhost host (" +
+        endpointUrl.hostname +
+        "); the API key will be sent in cleartext.",
+    );
+  }
+
   if (config.apiKey.length < 5) return "API key appears too short to be valid.";
 
   return null;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // The URL parser normalizes IPv4 literals, so a "127." prefix covers [IP_REDACTED]/8.
+  if (host.startsWith("127.")) return true;
+  return host === "[::1]";
 }

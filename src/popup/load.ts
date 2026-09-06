@@ -12,6 +12,7 @@ import {
 import { diffLimitOrDefault } from "./save";
 import { markLoaded } from "./state";
 import { selectThinkingEffort, updateDiffConditionalVisibility } from "./ui";
+import { autoValidateEndpoint } from "./validate";
 
 const STORAGE_KEYS = [
   "apiEndpoint",
@@ -25,7 +26,7 @@ const STORAGE_KEYS = [
 ];
 
 function readFileConfig(): Promise<FileConfig | null> {
-  return fetch(chrome.runtime.getURL("config.local.json"))
+  return fetch(chrome.runtime.getURL("config.local.json"), { signal: AbortSignal.timeout(10_000) })
     .then((r) => (r.ok ? (r.json() as Promise<FileConfig>) : null))
     .catch(() => null);
 }
@@ -75,8 +76,10 @@ export function loadSettings(): void {
         (fileConfig ? "present" : "none"),
     );
     applyValues(direct, fileConfig);
-    // No implicit validation here: a key-bearing network call requires an
-    // explicit click. The status stays "Not validated" (popup.html default).
+    // Probe reachability without the API key; autoValidateEndpoint bails out
+    // when the URL is invalid or host permission is absent, and the probe
+    // itself never carries the key — only the explicit Test buttons do.
+    autoValidateEndpoint();
     return undefined;
   });
 }
