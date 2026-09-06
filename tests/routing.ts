@@ -101,6 +101,16 @@ async function testGenerateRouting(): Promise<void> {
   expectIncludes("routed prompt carried the commit", prompts[0] ?? "", "routed commit");
 }
 
+async function testGenerateHeadingOnlyRouting(): Promise<void> {
+  // A body-only LLM answer (leading "## Summary") routes through with an empty
+  // title — the content script keeps the user's existing title in that case.
+  resetHarness(harness, {}, chainHandlers(llmResponder(["## Summary\nHeading-only routed body."]), githubPrHandler()));
+  const { response } = await dispatch({ type: "generate", data: { commits: [{ message: "routed commit" }] } });
+  const r = response as { title?: string; description?: string };
+  expectMatch("heading-only response routes an empty title", r.title, "");
+  expectIncludes("heading-only response keeps the full body", r.description ?? "", "Heading-only routed body.");
+}
+
 async function testGenerateErrorRelay(): Promise<void> {
   resetHarness(harness, { apiKey: "" }, llmResponder(["unused"]));
   const { response } = await dispatch({ type: "generate", data: {} });
@@ -215,6 +225,7 @@ async function main(): Promise<void> {
   await testGetConfig();
   await testSaveConfig();
   await testGenerateRouting();
+  await testGenerateHeadingOnlyRouting();
   await testGenerateErrorRelay();
   await testGenerateTitleRouting();
   await testGenerateDescriptionRouting();

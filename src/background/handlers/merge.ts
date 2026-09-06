@@ -3,6 +3,7 @@ import { discoverRepoStyle } from "../github/discovery";
 import { callAPI } from "../llm";
 import { logMsg } from "../log";
 import { parseDescriptionOnlyResponse, parseTitleOnlyResponse } from "../parse";
+import { isLikelyTemplate } from "../prompts/common";
 import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../prompts/merge-prompts";
 import { refineDescription } from "../refinement";
 import { buildChangesSummary } from "../summary";
@@ -79,6 +80,7 @@ export async function handleGenerateMergeDescription(
   const existingMergeTitle = data.existingMergeTitle || "";
   const existingDescription = data.existingDescription || gathered.prDetails.body || "";
   const existingMergeDesc = data.existingMergeDescription || "";
+  const preserveAuthored = existingDescription.trim().length > 0 && !isLikelyTemplate(existingDescription);
 
   const changesSummary = buildChangesSummary(
     {
@@ -110,7 +112,9 @@ export async function handleGenerateMergeDescription(
 
   // Same quality loop as the PR description flow: generate → score → refine.
   // Anchors stay off: the merge prompt forbids diff hunk refs (git log, not the
-  // PR page) and this flow never calls resolveDiffLinks.
+  // PR page) and this flow never calls resolveDiffLinks. preserveAuthored
+  // mirrors handlers/description.ts: an authored (non-template) body must
+  // survive refinement verbatim.
   const { description: refinedDescription, finalScore } = await refineDescription(
     config,
     gathered.prDetails.title || data.existingTitle || "",
@@ -121,7 +125,7 @@ export async function handleGenerateMergeDescription(
     10, // target score
     buildStats(gathered.prDetails, gathered.fileChanges),
     undefined,
-    undefined,
+    preserveAuthored,
     signal,
   );
   logMsg("handleGenerateMergeDescription - refinement score: " + String(finalScore));

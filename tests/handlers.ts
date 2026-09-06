@@ -11,10 +11,12 @@ import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
 import {
   captureRejection,
   chainHandlers,
+  DEFAULT_PR_DETAILS,
   githubPrHandler,
   installBackgroundHarness,
   llmCallCount,
   llmResponder,
+  type PrMockSpec,
   patchCalls,
   resetHarness,
 } from "./handlers-harness";
@@ -232,9 +234,50 @@ async function testMergeDescriptionHappyPath(): Promise<void> {
   expectMatch("merge description never PATCHes the PR", patchCalls(harness).length, 0);
 }
 
+async function testGenerateHeadingOnlyResponse(): Promise<void> {
+  // A body-only answer (leading "## Summary") leaves the title empty so the content script keeps the user's title.
+  resetHarness(harness, {}, chainHandlers(llmResponder(["## Summary\nBody only."]), githubPrHandler()));
+  const result = await handleGenerate(GENERATE_DATA);
+  expectMatch("heading-only LLM answer yields an empty title", result.title, "");
+  expectIncludes("heading-only body still fills the description", result.description, "Body only.");
+}
+
+const DANGLING_FENCE_MERGE_ANSWER =
+  "## Summary\nMock merge body with a dangling fence.\n\n- **Note** — " +
+  "this deliberately padded bullet rambles on far past the sixty word limit with filler after filler after filler " +
+  "so the bullet-length check joins the dangling fence and the uncovered commit as a third failure and the " +
+  "refinement loop is guaranteed at least one iteration regardless of how lenient the other polish checks are" +
+  "\n\n```bash\nnpm test";
+
+// The dangling fence forces a refinement iteration, so the second recorded
+// LLM prompt exposes which rubric the loop selected.
+function mergeObservationPrompts(prSpec: PrMockSpec): Promise<string[]> {
+  const prompts: string[] = [];
+  const handler = chainHandlers(llmResponder([DANGLING_FENCE_MERGE_ANSWER], prompts), githubPrHandler(prSpec));
+  resetHarness(harness, {}, handler);
+  return handleGenerateMergeDescription(OPENED_PR).then(() => prompts);
+}
+
+async function testMergeDescriptionPreserveAuthoredParity(): Promise<void> {
+  // An authored (non-template) body switches merge refinement to preserve-authored mode (parity with description.ts).
+  const authored = await mergeObservationPrompts({
+    prDetails: { ...DEFAULT_PR_DETAILS, body: "Hand-written context from the author." },
+  });
+  expectMatch("authored: dangling fence forces a refinement iteration", authored.length >= 2, true);
+  expectIncludes("merge prompt carries the authored body", authored[0] ?? "", "Hand-written context from the author.");
+  expectIncludes("authored body selects the preserve-authored rubric", authored[1] ?? "", "REDUCED RUBRIC");
+  expectMatch("preserve-authored prompt drops the full rubric", (authored[1] ?? "").includes("12-point rubric"), false);
+  expectIncludes("merge refinement keeps anchors disabled", authored[1] ?? "", "ANCHORS: false");
+  const plain = await mergeObservationPrompts({});
+  expectMatch("empty body still force-iterates", plain.length >= 2, true);
+  expectIncludes("empty body keeps the full rubric", plain[1] ?? "", "12-point rubric");
+  expectIncludes("empty-body refinement keeps anchors disabled", plain[1] ?? "", "ANCHORS: false");
+}
+
 async function main(): Promise<void> {
   console.log("=== Background Handler Tests ===\n");
   await testGenerateHappyPath();
+  await testGenerateHeadingOnlyResponse();
   await testGenerateInvalidConfig();
   await testGenerateApiAuthFailure();
   await testTitleHappyPath();
@@ -248,6 +291,7 @@ async function main(): Promise<void> {
   await testApplyRejectsEmptyText();
   await testMergeTitleHappyPath();
   await testMergeDescriptionHappyPath();
+  await testMergeDescriptionPreserveAuthoredParity();
 
   const failures = getFailures();
   if (failures > 0) {

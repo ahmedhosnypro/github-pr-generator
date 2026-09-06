@@ -132,6 +132,42 @@ function testContentAfterBotBlockSurvives(): void {
   expectExcludes("mid-document bot section removed", outSuffix, "bot bullets");
 }
 
+function testLeadingHeadingIsNotATitle(): void {
+  const summaryOnly = parseCombinedResponse(
+    "## Summary\nFixed the token expiry bug.\n\n## Changes\n- swapped the cache",
+  );
+  expectMatch("leading section heading produces no title", summaryOnly.title, "");
+  expectIncludes("leading heading kept inside the description", summaryOnly.description, "## Summary");
+  expectIncludes("heading-only body survives intact", summaryOnly.description, "Fixed the token expiry bug.");
+  expectIncludes("second section kept too", summaryOnly.description, "## Changes");
+  const otherSection = parseCombinedResponse("## Testing\n1. Run the suite");
+  expectMatch("other known headings also stay description-only", otherSection.title, "");
+  const shouty = parseCombinedResponse("### WALKTHROUGH\nStep one.");
+  expectMatch("heading match is case-insensitive and level-agnostic", shouty.title, "");
+  const fenced = parseCombinedResponse("```markdown\n## Description\nWrapped body.\n```");
+  expectMatch("fenced section-only answer is still description-only", fenced.title, "");
+  expectIncludes("outer fence stripped from description-only body", fenced.description, "## Description");
+  const unknownHeading = parseCombinedResponse("## What changed\nsome body");
+  expectMatch("unknown leading heading still parses as a title", unknownHeading.title, "What changed");
+}
+
+function testOverviewLinePlacement(): void {
+  const leading = parseDescriptionOnlyResponse("Overview: did the thing\n\nBody line.");
+  expectMatch("leading Overview pseudo-title still stripped", leading, "Body line.");
+  const midBody = parseDescriptionOnlyResponse("## Notes\nOverview: prose the author wants kept");
+  expectIncludes("Overview after a heading survives", midBody, "Overview: prose the author wants kept");
+  const fenced = parseDescriptionOnlyResponse("```text\nOverview: example inside a fence\n```");
+  expectIncludes("Overview inside a fence survives", fenced, "Overview: example inside a fence");
+  const afterProse = parseDescriptionOnlyResponse("Real prose first.\nOverview: later line");
+  expectIncludes("Overview after prose survives", afterProse, "Overview: later line");
+  const combined = parseCombinedResponse("Title Words\n\n## Notes\nOverview: referenced again");
+  expectIncludes(
+    "combined parse keeps a non-leading Overview line",
+    combined.description,
+    "Overview: referenced again",
+  );
+}
+
 console.log("=== Parse / Bot-Signature Stripping Tests ===\n");
 testCodeRabbitBlock();
 testCubicAndMarkers();
@@ -145,6 +181,8 @@ testAnchorGuard();
 testBoldWrappedTitle();
 testAstralBoundaryTitle();
 testLeadingLabelPreserved();
+testLeadingHeadingIsNotATitle();
+testOverviewLinePlacement();
 
 const failures = getFailures();
 if (failures > 0) {
