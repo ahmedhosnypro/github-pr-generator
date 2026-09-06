@@ -1,5 +1,10 @@
 import { buildCombinedPrompt } from "../src/background/prompts/combined";
 import { buildDescriptionOnlyPrompt } from "../src/background/prompts/pr-prompts";
+import { resolveDiffLinks } from "../src/background/linkify";
+import { countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
+import { buildAnchorsSection, MAX_HUNKS_PER_FILE } from "../src/background/summary-anchors";
+import type { GitHubHunkRange, GitHubHunksByFile } from "../src/github-types";
+import type { FileChange } from "../src/types";
 import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
 import { K8S_TEMPLATE } from "./fixtures";
 
@@ -72,6 +77,57 @@ function testAnchorDiscipline(): void {
   expectIncludes("combined keeps no-fabrication clause", prompt, "emit no diffhunk links at all");
 }
 
+const ANCHOR = "diff-" + "a".repeat(64);
+
+function fc(path: string, additions: number, deletions: number, diffAnchor = ANCHOR): FileChange {
+  return { path, type: "modified", additions, deletions, diffAnchor };
+}
+
+function hunks(count: number): GitHubHunkRange[] {
+  const ranges: GitHubHunkRange[] = [];
+  for (let i = 0; i < count; i++) {
+    ranges.push({ rightStart: 5 + i * 10, rightCount: 6 });
+  }
+  return ranges;
+}
+
+function testAnchorsRequireHunks(): void {
+  // A bare file anchor with no parsed hunks is degenerate: nothing may be
+  // offered, emitted, or counted for it.
+  expectMatch("anchors without hunks are not usable", hasUsableAnchors([fc("src/a.ts", 5, 1)], null), false);
+  expectMatch("hunkless anchors count as zero supply", countUsableAnchors([fc("src/a.ts", 5, 1)], null), 0);
+  const empty = buildAnchorsSection([fc("src/a.ts", 5, 1)], null);
+  expectMatch("hunkless file emits no entry", empty.includes("src/a.ts"), false);
+}
+
+function testAnchorEmissionRoundTrip(): void {
+  // Every emitted [[N]](diffhunk://...) marker must be hunk-scoped and must
+  // resolve through linkify — emission format and DIFFHUNK_LINK must agree.
+  const hunkRanges: GitHubHunksByFile = { "src/a.ts": hunks(2) };
+  const section = buildAnchorsSection([fc("src/a.ts", 9, 1)], hunkRanges);
+  expectIncludes("file entry is hunk-scoped", section, "](diffhunk://#" + ANCHOR + "_L5-R10)");
+  expectIncludes("hunk lines are hunk-scoped", section, "[[1]](diffhunk://#" + ANCHOR + "_L5-R10)");
+  const markers = section.match(/\[\[\d+\]\]\(diffhunk:\/\/[^)]*\)/g) ?? [];
+  expectMatch("emitted markers exist", markers.length > 0, true);
+  const resolved = resolveDiffLinks(markers.join(" "), { owner: "o", repo: "r", kind: "pull", prNumber: "1" });
+  expectMatch("all emitted markers resolve", resolved.includes("diffhunk://"), false);
+  expectIncludes("resolved marker is hunk-scoped", resolved, "#" + ANCHOR + "R5-R10");
+}
+
+function testAnchorCapsAndNoise(): void {
+  // Noise files (lockfiles etc.) are filtered before ranking, and each file
+  // lists at most MAX_HUNKS_PER_FILE hunks with a "+N more" note.
+  const lock = fc("package-lock.json", 9999, 9999, "diff-" + "c".repeat(64));
+  const real = fc("src/real.ts", 4, 2);
+  const hunkRanges: GitHubHunksByFile = { "package-lock.json": hunks(1), "src/real.ts": hunks(MAX_HUNKS_PER_FILE + 3) };
+  const section = buildAnchorsSection([lock, real], hunkRanges);
+  expectMatch("noise file excluded from ranking", section.includes("package-lock.json"), false);
+  expectIncludes("noise file excluded from unanchored path too", section, "src/real.ts");
+  const hunksListed = (section.match(new RegExp("diffhunk://#" + ANCHOR, "g")) ?? []).length;
+  expectMatch("per-file hunk cap respected", hunksListed, MAX_HUNKS_PER_FILE + 1);
+  expectIncludes("excess hunks folded into a note", section, "(+3 more hunks");
+}
+
 console.log("=== Render-Quality Prompt Assertions ===\n");
 testSummaryWording();
 testChangesAndWalkthroughWording();
@@ -79,6 +135,9 @@ testTestingWording();
 testFormattingContractRules();
 testTemplateEtiquette();
 testAnchorDiscipline();
+testAnchorsRequireHunks();
+testAnchorEmissionRoundTrip();
+testAnchorCapsAndNoise();
 
 const failures = getFailures();
 if (failures > 0) {

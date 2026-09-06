@@ -50,7 +50,7 @@ function assemble(changesSummary: string, existingBody: string, style?: RepoStyl
   }
 
   prompt += "RULES:\n";
-  prompt += combinedRules();
+  prompt += combinedRules(hasBody || Boolean(style?.template));
   return prompt;
 }
 
@@ -58,7 +58,10 @@ export function buildCombinedPrompt(changesSummary: string, existingBody: string
   return enforcePromptBudget((summary, body) => assemble(summary, body, style), changesSummary, existingBody);
 }
 
-function combinedRules(): string {
+// The template-fill rule only applies when the prompt actually carries an
+// existing body or a discovered repo template; stating it unconditionally
+// hints at structure the model never sees.
+function combinedRules(hasTemplateOrBody: boolean): string {
   return [
     "- Be specific — reference actual code entities from the diff, not generic descriptions\n",
     ANCHOR_RULE,
@@ -75,6 +78,10 @@ function combinedRules(): string {
     "  ✅ ✔️ `src/auth.ts` — Added JWT token validation. [[1]](diffhunk://#diff-46b776ea_L5-R25)\n",
     "  ✅ ✔️ Updated loading backgrounds in `loading.tsx` to use theme variables. [[2]](diffhunk://#diff-b688a522_L10-R30), [[3]](diffhunk://#diff-b688a522_L40-R80)\n",
     "  ❌ ❌ **Don't:** Many files updated to fix dark mode theming. (No diff links)\n",
-    "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
+    ...(hasTemplateOrBody
+      ? [
+          "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
+        ]
+      : []),
   ].join("");
 }

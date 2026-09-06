@@ -29,6 +29,15 @@ export function wrapUntrustedData(data: string): string {
   return UNTRUSTED_DATA_OPEN + "\n" + data + "\n" + UNTRUSTED_DATA_CLOSE + "\n";
 }
 
+// Titles are echoed inside double quotes in prompt prose; a title containing
+// quotes or control characters (newlines in particular) would break that
+// framing, so quotes are softened and control chars stripped — same hygiene as
+// sanitizeCommitMessage in summary.ts. The block itself stays inside the
+// untrusted fence.
+export function quoteEmbeddedTitle(title: string): string {
+  return title.replace(/\p{Cc}|\p{Cf}/gu, "").replace(/"/g, "'");
+}
+
 // Default section skeleton used when the description field is empty.
 // Shared verbatim by the description-only and combined prompts.
 // Wording follows the corpus presentation study

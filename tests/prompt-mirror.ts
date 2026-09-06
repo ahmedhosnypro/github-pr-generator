@@ -49,7 +49,7 @@ function existingContentSection(existingBody: string): string {
   return section + wrapUntrustedData(existingBody) + "\n";
 }
 
-function combinedRules(): string {
+function combinedRules(hasBody: boolean): string {
   return [
     "- Be specific — reference actual code entities from the diff, not generic descriptions\n",
     "- In the Changes and Walkthrough sections, **add diff hunk reference links for every file you mention**: Format: `[[N]](diffhunk://ANCHOR_Lstart-Rend)` (e.g., `[[1]](diffhunk://#diff-4a5d3f2_L5-R25)`) using the reference numbers from the Anchors section. **Use only right-side line ranges** (L5-R25 means lines 5-25 in the new file). Add 1+ references per file. For large diffs (many files), focus on substantive claims and include anchors for the most important files only; for small diffs, keep one or more references for every file mentioned. Use ONLY links from the Anchors section — if this prompt has no Anchors section, emit no diffhunk links at all.\n",
@@ -66,7 +66,11 @@ function combinedRules(): string {
     "  ✅ ✔️ `src/auth.ts` — Added JWT token validation. [[1]](diffhunk://#diff-46b776ea_L5-R25)\n",
     "  ✅ ✔️ Updated loading backgrounds in `loading.tsx` to use theme variables. [[2]](diffhunk://#diff-b688a522_L10-R30), [[3]](diffhunk://#diff-b688a522_L40-R80)\n",
     "  ❌ ❌ **Don't:** Many files updated to fix dark mode theming. (No diff links)\n",
-    "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
+    ...(hasBody
+      ? [
+          "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
+        ]
+      : []),
   ].join("");
 }
 
@@ -92,7 +96,7 @@ export function buildCombinedPrompt(changesSummary: string, existingBody: string
     prompt += defaultSectionsPrompt();
   }
   prompt += "RULES:\n";
-  prompt += combinedRules();
+  prompt += combinedRules(existingBody.trim().length > 0);
 
   return prompt;
 }
