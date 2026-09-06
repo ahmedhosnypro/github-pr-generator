@@ -52,6 +52,13 @@ function testTitleStyleInference(): void {
     conv.examples.every((t) => t.includes(":")),
     true,
   );
+  // Blank titles (scrape misses) are skipped, not classified as imperative.
+  expectMatch(
+    "empty titles skipped before sampling",
+    inferTitleStyle(["", "  ", "fix: one", "fix: two", "fix: three", "fix: four"]).style,
+    "conventional",
+  );
+  expectMatch("only blank titles give no style", inferTitleStyle(["", " ", "\t"]).style, null);
 }
 
 function testLengthInference(): void {
@@ -65,6 +72,24 @@ function testLengthInference(): void {
   const authored = [boilerplate, sample(words(30)), sample(words(10))];
   expectMatch("template boilerplate excluded from word count", inferLength(authored), "S");
   expectMatch("too few bodies give no length", inferLength([sample(words(10)), sample(words(300))]), null);
+
+  // Fenced blocks are quoted logs/commands, not authored content — a big log
+  // paste must not inflate the length bucket.
+  const withLog = sample(words(10) + "\n```text\n" + words(150) + "\n```\n" + words(10));
+  expectMatch(
+    "fenced blocks excluded from word count",
+    inferLength([withLog, sample(words(15)), sample(words(25))]),
+    "S",
+  );
+
+  // An unterminated <!-- keeps its tail as authored text (fail-open) instead of
+  // zeroing it out — median moves from S to M here.
+  const unterminated = sample(words(10) + "\n<!-- never closed\n" + words(60));
+  expectMatch(
+    "unterminated comment tail still counts as authored",
+    inferLength([unterminated, sample(words(52)), sample(words(48))]),
+    "M",
+  );
 }
 
 function testRepoStyleAggregation(): void {

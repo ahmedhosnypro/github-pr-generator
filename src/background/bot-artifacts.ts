@@ -58,9 +58,17 @@ export interface StripOptions {
  */
 export function stripBotArtifacts(description: string, options?: StripOptions): string {
   const preserveAiDisclosure = options?.preserveAiDisclosure === true;
-  const templateLike = isLikelyTemplate(description);
-  // Whole-comment markers are harmless inline too — strip them everywhere first.
-  const text = description.replaceAll(/<!--\s*(?:copyberry-projection-id|coderabbit|greptile)[^>]*-->/gi, "");
+  // Whole-comment markers are harmless inline too — strip them everywhere
+  // first. [\s\S]*? (not [^>]*) so a '>' inside the marker can't defeat it.
+  const text = description.replaceAll(/<!--\s*(?:copyberry-projection-id|coderabbit|greptile)[\s\S]*?-->/gi, "");
+  // Stamp-sparing needs stronger evidence than isLikelyTemplate's bare
+  // "2+ headings" clause: every structured generated description has that, and
+  // generated rubber stamps are exactly what must go. A multi-heading body
+  // only counts as a template when it also carries template machinery
+  // (HTML comment boilerplate); single-scaffold forms still qualify via
+  // isLikelyTemplate's comment/checkbox evidence.
+  const headingCount = (text.match(/^#{1,6}\s+/gm) ?? []).length;
+  const templateLike = isLikelyTemplate(text) && (headingCount < 2 || text.includes("<!--"));
   const kept: string[] = [];
   let inBotSection = false;
   for (const line of text.split("\n")) {
