@@ -1,5 +1,11 @@
 import { buildHouseStyleNote, type RepoStyle } from "../repo-style";
-import { enforcePromptBudget, INTENT_TITLES_RULE, TITLE_STYLE_GUIDANCE, wrapUntrustedData } from "./common";
+import {
+  enforcePromptBudget,
+  INTENT_TITLES_RULE,
+  quoteEmbeddedTitle,
+  TITLE_STYLE_GUIDANCE,
+  wrapUntrustedData,
+} from "./common";
 
 export function buildMergeTitlePrompt(
   changesSummary: string,
@@ -26,7 +32,8 @@ function assembleMergeTitlePrompt(
 
   if (existingTitle && existingTitle.trim().length > 0) {
     prompt +=
-      "## PR Title (untrusted data)\n" + wrapUntrustedData('The pull request title is: "' + existingTitle + '"');
+      "## PR Title (untrusted data)\n" +
+      wrapUntrustedData('The pull request title is: "' + quoteEmbeddedTitle(existingTitle) + '"');
     prompt +=
       "Use this as a reference. The merge commit title can be similar but should be a clean, concise summary suitable for the git history.\n\n";
   }
@@ -34,7 +41,7 @@ function assembleMergeTitlePrompt(
   if (existingMergeTitle && existingMergeTitle.trim().length > 0) {
     prompt +=
       "## Existing Merge Commit Title (untrusted data)\n" +
-      wrapUntrustedData('The current merge commit title is: "' + existingMergeTitle + '"') +
+      wrapUntrustedData('The current merge commit title is: "' + quoteEmbeddedTitle(existingMergeTitle) + '"') +
       "Generate an improved version.\n\n";
   }
 
@@ -89,13 +96,15 @@ function assembleMergeDescriptionPrompt(
 
   if (existingTitle && existingTitle.trim().length > 0) {
     prompt +=
-      "## PR Title (untrusted data)\n" + wrapUntrustedData('The pull request title is: "' + existingTitle + '"') + "\n";
+      "## PR Title (untrusted data)\n" +
+      wrapUntrustedData('The pull request title is: "' + quoteEmbeddedTitle(existingTitle) + '"') +
+      "\n";
   }
 
   if (existingMergeTitle && existingMergeTitle.trim().length > 0) {
     prompt +=
       "## Merge Commit Title (untrusted data)\n" +
-      wrapUntrustedData('The merge commit title is: "' + existingMergeTitle + '"') +
+      wrapUntrustedData('The merge commit title is: "' + quoteEmbeddedTitle(existingMergeTitle) + '"') +
       "\n";
   }
 

@@ -1,6 +1,7 @@
 import type { GitHubHunksByFile } from "../github-types";
 import type { BranchContext, CommitInfo, FileChange, FileChangeType, GenerateData, PRStats } from "../types";
 import { MAX_LISTED_COMMITS } from "./commit-coverage";
+import { isNoiseFile } from "./github/diff-parse";
 import { wrapUntrustedData } from "./prompts/common";
 import { buildAnchorsSection, MAX_ANCHOR_FILES } from "./summary-anchors";
 
@@ -109,31 +110,32 @@ function buildStatsSection(stats: PRStats): string {
   return section;
 }
 
-export function hasUsableAnchors(fileChanges: FileChange[] | undefined, hunkRanges: GitHubHunksByFile | null): boolean {
-  if (hunkRanges && Object.keys(hunkRanges).length > 0) return true;
-  return !!fileChanges?.some((fc) => fc.diffAnchor.length > 5);
+// Anchors are only usable when there are real hunks to hang them on: a bare
+// file anchor would produce the degenerate file-only marker, which GitHub
+// cannot resolve to a hunk-scoped link. Noise files never count either.
+export function hasUsableAnchors(
+  _fileChanges: FileChange[] | undefined,
+  hunkRanges: GitHubHunksByFile | null,
+): boolean {
+  return countUsableAnchors(_fileChanges, hunkRanges) > 0;
 }
 
 // Number of distinct files the prompt can offer diff anchors for: a file
-// counts if it carries a usable diffAnchor or appears in the hunk ranges. The
-// refinement anchor check scales its demand to this supply, so it must share
-// the summary builder's cap (mirroring MAX_LISTED_COMMITS in commit-coverage.ts).
+// counts only when parsed hunk ranges exist for it and it is not a noise file
+// (the Anchors section emits hunk-scoped markers only). The refinement anchor
+// check scales its demand to this supply, so it must share the summary
+// builder's cap (mirroring MAX_LISTED_COMMITS in commit-coverage.ts).
 export function countUsableAnchors(
-  fileChanges: FileChange[] | undefined,
+  _fileChanges: FileChange[] | undefined,
   hunkRanges: GitHubHunksByFile | null,
 ): number {
-  const files = new Set<string>();
-  if (fileChanges) {
-    for (const fc of fileChanges) {
-      if (fc.diffAnchor.length > 5) files.add(fc.path);
-    }
+  if (!hunkRanges) return 0;
+  let files = 0;
+  for (const [filePath, hunks] of Object.entries(hunkRanges)) {
+    if (isNoiseFile(filePath) || hunks.length === 0) continue;
+    files++;
   }
-  if (hunkRanges) {
-    for (const filePath of Object.keys(hunkRanges)) {
-      files.add(filePath);
-    }
-  }
-  return Math.min(files.size, MAX_ANCHOR_FILES);
+  return Math.min(files, MAX_ANCHOR_FILES);
 }
 
 export function buildChangesSummary(

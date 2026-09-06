@@ -52,6 +52,39 @@ expectMatch("all bare refs removed", /\[\[\d+\]\]/.test(plain), false);
 const noop = "plain text without markers";
 expectMatch("no markers → identity", resolveDiffLinks(noop, target), noop);
 
+// Compare kind: branch separators survive encoding — `feature/x` keeps its
+// slash and `fork-owner:branch` keeps its colon — while segment contents with
+// URL-special characters are percent-encoded.
+const compareTarget = {
+  owner: "o",
+  repo: "r",
+  kind: "compare" as const,
+  baseBranch: "feature/cool stuff",
+  headBranch: "someone:fix/thing",
+};
+const compareOut = resolveDiffLinks("x [[1]](diffhunk://#diff-" + HASH + "_L10-R20) y", compareTarget);
+expectMatch(
+  "compare refs encoded per-segment",
+  compareOut.includes(
+    "https://github.com/o/r/compare/feature/cool%20stuff...someone:fix/thing#diff-" + HASH + "R10-R20",
+  ),
+  true,
+);
+expectMatch("compare marker leaves no diffhunk text", compareOut.includes("diffhunk://"), false);
+
+// Compare kind without both branches cannot produce a resolvable URL — every
+// marker degrades to its plain reference number instead of a dead link.
+const noBranches = resolveDiffLinks("x [[1]](diffhunk://#diff-" + HASH + "_L10-R20) y [[2]] z", {
+  owner: "o",
+  repo: "r",
+  kind: "compare" as const,
+});
+expectMatch("missing branches degrade to plain refs", noBranches, "x 1 y  z");
+
+// Degenerate hash after stripping (diffhunk://#_L5-R25) degrades rather than
+// emitting an empty #diff- fragment.
+expectMatch("empty hash degrades", resolveDiffLinks("a [[7]](diffhunk://#_L5-R25) b", target), "a 7 b");
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

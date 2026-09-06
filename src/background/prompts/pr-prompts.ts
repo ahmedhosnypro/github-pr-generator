@@ -11,6 +11,7 @@ import {
   INTENT_TITLES_RULE,
   NO_BOT_SIGNATURES_RULE,
   NO_EMPTY_OR_PLACEHOLDERS_RULE,
+  quoteEmbeddedTitle,
   SCOPE_BOUNDARIES_RULE,
   SECTIONS_PROMPT,
   TITLE_STYLE_GUIDANCE,
@@ -48,7 +49,7 @@ function assembleTitleOnlyPrompt(
   } else if (existingTitle && existingTitle.trim().length > 0) {
     prompt +=
       "## Existing Title (untrusted data)\n" +
-      wrapUntrustedData('The current title is: "' + existingTitle + '"') +
+      wrapUntrustedData('The current title is: "' + quoteEmbeddedTitle(existingTitle) + '"') +
       "Generate an improved version.\n\n";
   }
 
@@ -95,7 +96,9 @@ function assembleDescriptionOnlyPrompt(
 
   if (existingTitle && existingTitle.trim().length > 0) {
     prompt +=
-      "## Current Title (untrusted data)\n" + wrapUntrustedData('The PR title is: "' + existingTitle + '"') + "\n";
+      "## Current Title (untrusted data)\n" +
+      wrapUntrustedData('The PR title is: "' + quoteEmbeddedTitle(existingTitle) + '"') +
+      "\n";
   }
 
   const hasDescription = existingDescription.trim().length > 0;
@@ -119,12 +122,15 @@ function assembleDescriptionOnlyPrompt(
     prompt += SECTIONS_PROMPT;
   }
   prompt += "RULES:\n";
-  prompt += descriptionRules();
+  prompt += descriptionRules(hasDescription || Boolean(style?.template));
 
   return prompt;
 }
 
-function descriptionRules(): string {
+// The template-fill rule only applies when the prompt actually carries an
+// existing body or a discovered repo template; stating it unconditionally
+// hints at structure the model never sees.
+function descriptionRules(hasTemplateOrBody: boolean): string {
   return [
     "- Be specific — reference actual code entities from the diff, not generic descriptions\n",
     ANCHOR_RULE,
@@ -142,6 +148,10 @@ function descriptionRules(): string {
     "  ✅ ✔️ Updated loading backgrounds in `loading.tsx` to use theme variables. [[2]](diffhunk://#diff-b688a522_L10-R30), [[3]](diffhunk://#diff-b688a522_L40-R80)\n",
     "  ❌ ❌ **Don't:** Many files updated to fix dark mode theming. (No diff links)\n",
     "- Do NOT output a title line — output ONLY the description body\n",
-    "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
+    ...(hasTemplateOrBody
+      ? [
+          "- If the user has existing content in the description field (a PR template), fill in its sections instead of using the section structure above\n",
+        ]
+      : []),
   ].join("");
 }

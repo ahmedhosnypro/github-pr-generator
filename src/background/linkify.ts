@@ -21,14 +21,26 @@ interface DiffLinkTarget {
   headBranch?: string;
 }
 
-function diffBaseUrl(target: DiffLinkTarget): string {
+// GitHub compare refs keep their structure separators readable: `feature/x`
+// and `fork-owner:branch` both work, so only the segments between `/` and `:`
+// are URI-encoded (spaces, '#', '?' etc.).
+function encodeCompareRef(ref: string): string {
+  return ref
+    .split(/([/:])/)
+    .map((segment) => (segment === "/" || segment === ":" ? segment : encodeURIComponent(segment)))
+    .join("");
+}
+
+// Null when there is not enough target data to build a URL the browser would
+// resolve (compare kind without both branches) — callers degrade every marker
+// to its plain reference number instead of linking to an empty compare page.
+function diffBaseUrl(target: DiffLinkTarget): string | null {
   const prefix = "https://github.com/" + target.owner + "/" + target.repo;
   if (target.kind === "pull" && target.prNumber) {
     return prefix + "/pull/" + target.prNumber + "/files";
   }
-  const base = encodeURIComponent(target.baseBranch ?? "");
-  const head = encodeURIComponent(target.headBranch ?? "");
-  return prefix + "/compare/" + base + "..." + head;
+  if (!target.baseBranch || !target.headBranch) return null;
+  return prefix + "/compare/" + encodeCompareRef(target.baseBranch) + "..." + encodeCompareRef(target.headBranch);
 }
 
 // [[N]](diffhunk://[#]diff-HASH_Ls-Re) — # and diff- optional so the bare-hash
@@ -46,6 +58,9 @@ const BARE_REF = /\[\[(\d+)\]\](?!\()/g;
 
 export function resolveDiffLinks(body: string, target: DiffLinkTarget): string {
   const base = diffBaseUrl(target);
+  if (!base) {
+    return body.replace(UNRESOLVED_DIFFHUNK, "$1").replace(BARE_REF, "");
+  }
   const linked = body.replace(
     DIFFHUNK_LINK,
     (_match, num: string, anchor: string | undefined, start: string, end: string) => {
@@ -55,6 +70,8 @@ export function resolveDiffLinks(body: string, target: DiffLinkTarget): string {
       // The regex also accepts a bare hash, so re-attach the diff- prefix.
       let hash = anchor.replace(/^#/, "").replace(/_+$/, "");
       if (!hash.startsWith("diff-")) hash = "diff-" + hash;
+      // Degenerate marker with an empty hash (diffhunk://#_L5-R25): no target.
+      if (hash === "diff-") return num;
       const lines = start && end ? "R" + start + "-R" + end : "";
       return "[" + num + "](" + base + "#" + hash + lines + ")";
     },
