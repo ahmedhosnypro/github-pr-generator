@@ -35,7 +35,7 @@ function extractDiffOutcome(
       logMsg("Hint: Private repo requires GitHub PAT. Suggesting user to configure it.");
     } else if (diffResult.error === "GITHUB_RATE_LIMITED") {
       logMsg("Hint: GitHub API rate limit hit. Suggesting user to add GitHub PAT for higher limits.");
-    } else if (diffResult.error === "GITHUB_FORBIDDEN") {
+    } else if (diffResult.error === "GITHUB_API_ERROR" && diffResult.status === 403) {
       logMsg("Hint: GitHub 403 with quota remaining — likely SSO enforcement or insufficient PAT permissions.");
     }
     return { diffText: null, hunkRanges: null };
