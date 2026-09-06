@@ -11,6 +11,9 @@ const GENERATED_CREDIT = /\b(?:generated|created|produced|written)\s+(?:by|with|
 const CREDIT_TOOL = /\b(?:CodeRabbit|cubic|Greptile|Copilot|Claude|ChatGPT|Gemini|LLM|AI assistant)\b/i;
 const HEADER_TOOL = /\bby\s+(?:CodeRabbit|cubic|Greptile|GitHub Copilot|AI assistant|ellipsis)\b/i;
 const TRAILER_TOOL = /\b(?:CodeRabbit|coderabbitai|cubic|Greptile|Copilot|bot)\b/i;
+// AI assistants an honest disclosure might credit — kept distinct from review
+// bots (CodeRabbit/Greptile/cubic), whose artifacts are always stripped.
+const DISCLOSURE_TOOL = /\b(?:Claude|Copilot|ChatGPT|Gemini|LLM|AI assistant)\b/i;
 const CATEGORY_BULLET = /\*\*(?:Bug Fixes|New Features|Documentation|Enhancements|Chores)\*\*/i;
 const BADGE_ONLY = /^(?:!\[[^\]]*\]\([^)]*\)|\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\))$/;
 
@@ -21,16 +24,28 @@ function isRubberStampLine(line: string): boolean {
   return /^[-*]\s+\[[ x]\]\s+/i.test(line) && /\b(?:tested|verified|validated)\b/i.test(line);
 }
 
-function isBotLine(line: string): boolean {
+function isBotLine(line: string, preserveAiDisclosure: boolean): boolean {
   const trimmed = line.trim();
   if (/^#{1,6}\s/.test(trimmed) && HEADER_TOOL.test(line)) return true;
-  if (GENERATED_CREDIT.test(line) && CREDIT_TOOL.test(line)) return true;
+  const disclosure = preserveAiDisclosure && DISCLOSURE_TOOL.test(line);
+  if (GENERATED_CREDIT.test(line) && CREDIT_TOOL.test(line)) return !disclosure;
   if (/^(?:Co-Authored-By|Assisted-by|Authored-by|Signed-off-by)\s*:/i.test(trimmed) && TRAILER_TOOL.test(line)) {
-    return true;
+    return !disclosure;
   }
   if (CATEGORY_BULLET.test(line)) return true;
   if (/^Automated Code Change$/i.test(trimmed)) return true;
   return BADGE_ONLY.test(trimmed);
+}
+
+export interface StripOptions {
+  /**
+   * Set when the repo's PR template mandates an AI-assistance disclosure
+   * (repo-style.ts `aiDisclosure`). Lines that credit an AI assistant are
+   * then kept — they may be the truthful answer the prompt demanded, and
+   * deleting them would contradict the mandate to disclose. Artifacts from
+   * review bots (CodeRabbit/Greptile/cubic) are stripped regardless.
+   */
+  preserveAiDisclosure?: boolean;
 }
 
 /**
@@ -41,7 +56,8 @@ function isBotLine(line: string): boolean {
  * (e.g. "## Summary by CodeRabbit") also swallows its own section content
  * up to the next heading — but never anything beyond it.
  */
-export function stripBotArtifacts(description: string): string {
+export function stripBotArtifacts(description: string, options?: StripOptions): string {
+  const preserveAiDisclosure = options?.preserveAiDisclosure === true;
   const templateLike = isLikelyTemplate(description);
   // Whole-comment markers are harmless inline too — strip them everywhere first.
   const text = description.replaceAll(/<!--\s*(?:copyberry-projection-id|coderabbit|greptile)[^>]*-->/gi, "");
@@ -55,7 +71,7 @@ export function stripBotArtifacts(description: string): string {
       // Content lines of a bot-authored section — drop until next heading.
       continue;
     }
-    if (isBotLine(line)) continue;
+    if (isBotLine(line, preserveAiDisclosure)) continue;
     if (!templateLike && isRubberStampLine(line)) continue;
     kept.push(line);
   }

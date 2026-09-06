@@ -39,11 +39,6 @@ interface SaveConfigMessage {
   data?: SaveConfigData | null;
 }
 
-interface GetStoredConfigMessage {
-  type: "getStoredConfig";
-  data?: null;
-}
-
 export const STREAM_PORT_NAME = "pr-generator-stream";
 
 /** Request sent by the content script over the streaming port. */
@@ -60,5 +55,4 @@ export type ExtensionMessage =
   | GenerateMergeTitleMessage
   | GenerateMergeDescriptionMessage
   | GetConfigMessage
-  | SaveConfigMessage
-  | GetStoredConfigMessage;
+  | SaveConfigMessage;

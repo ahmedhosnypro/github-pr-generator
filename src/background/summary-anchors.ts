@@ -58,7 +58,14 @@ function emitAnchoredFile(
   return { text, refNum };
 }
 
-// Add hunk ranges with diff anchors from DOM scraping
+// Cap anchors section for huge diffs — the prompt can only usefully reference
+// the largest N files. Files beyond the cap stay in the changes summary, just
+// without diff links.
+const MAX_ANCHOR_FILES = 50;
+
+// Add hunk ranges with diff anchors from DOM scraping. Anchoring is capped:
+// every file gets an anchor after REST hydration, so without a cap the
+// section balloons for large diffs. Rank by churn (additions + deletions).
 function emitAnchoredFiles(
   fileChanges: FileChange[],
   hunkRanges: GitHubHunksByFile | null,
@@ -67,8 +74,12 @@ function emitAnchoredFiles(
 ): EmitResult {
   let text = "";
   let refNum = startRefNum;
-  for (const fc of fileChanges) {
-    if (!fc.diffAnchor || fc.diffAnchor.length <= 5 || seenFiles[fc.path]) continue;
+  const ranked = fileChanges
+    .filter((fc) => fc.diffAnchor && fc.diffAnchor.length > 5)
+    .toSorted((a, b) => b.additions + b.deletions - (a.additions + a.deletions))
+    .slice(0, MAX_ANCHOR_FILES);
+  for (const fc of ranked) {
+    if (seenFiles[fc.path]) continue;
     const emitted = emitAnchoredFile(fc, hunkRanges, seenFiles, refNum);
     text += emitted.text;
     refNum = emitted.refNum;
@@ -101,10 +112,6 @@ function emitUnanchoredHunksCapped(
 }
 
 export function buildAnchorsSection(fileChanges: FileChange[], hunkRanges: GitHubHunksByFile | null): string {
-  // Cap anchors section for huge diffs — the prompt can only usefully reference
-  // the first N files. We still log all available anchors for observability.
-  const MAX_ANCHOR_FILES = 50;
-
   let summary = "## File Anchors and Hunk Line Ranges\n\n";
   summary +=
     "Use these attachment points to create clickable diff links. Format: `[[N]](diffhunk://#diff-HASH_Lstart-Rend)` where N is a sequential reference number. Only the files listed above have anchors — never invent `[[N]]` links for other files.\n\n";

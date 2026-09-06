@@ -81,7 +81,7 @@ cp config.local.example.json config.local.json
 }
 ```
 
-Re-run `bun run build` to copy the updated config into `dist/`, or just `bun run dev` to rebuild on every change.
+Re-run `bun run build` to copy the updated config into `dist/`, or just `bun run dev` to rebuild on every change. **Secrets (`apiKey`, `githubToken`) are stripped from the `dist/` copy** — the build warns when it strips them. Set them once in the extension popup instead; they're kept in `chrome.storage.local`, which takes precedence over the file.
 
 5. Load the extension in Chrome:
 
@@ -90,7 +90,7 @@ Re-run `bun run build` to copy the updated config into `dist/`, or just `bun run
    - Click **Load unpacked**
    - Select the `dist/` folder (inside the `github-pr-generator` directory)
 
-5. Navigate to a GitHub PR creation page and click **AI Generate**, or open any PR page and click **AI Title** / **AI Description**
+6. Navigate to a GitHub PR creation page and click **AI Generate**, or open any PR page and click **AI Title** / **AI Description**
 
 ---
 
@@ -106,6 +106,8 @@ The extension loads config from two sources, in priority order:
 ### config.local.json
 
 Create this file in the extension root directory. **It is gitignored and will never be committed.**
+
+Secret fields (`apiKey`, `githubToken`) in this file are **not** copied into `dist/` — the build strips them so a zipped or shared `dist/` can never leak your credentials. The extension reads secrets only from `chrome.storage.local`, so set them once via the extension popup. Non-secret defaults (`apiEndpoint`, `model`, diff limits, `testPr`) still ship in `dist/config.local.json`, and the full file (secrets included) is read directly by the Node test tooling (`tests/`).
 
 ```json
 {
@@ -199,11 +201,11 @@ The extension validates your config before making API calls and will show a clea
 
 ## Testing
 
-The extension includes local tests to validate commit coverage using a reference PR.
+The extension includes local tests: an offline suite that runs anywhere (`bun run test`), and a fetch-based suite that validates commit coverage against a reference PR (`bun run test:fetch`).
 
 ### Configuration
 
-Add a `testPr` section to your `config.local.json`:
+Only the fetch-based suite needs configuration. Add a `testPr` section to your `config.local.json`:
 
 ```json
 {
@@ -229,30 +231,47 @@ Add a `testPr` section to your `config.local.json`:
 
 ### Running Tests
 
-The full offline suite (`bun run test`) chains seventeen suites: **logic** (prompt wording, mirror drift), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **coverage**/**extension**/**full** (fetch-based, use the `testPr` fixture), **pr-creation** (prompt assembly), **refinement** (quality-loop scorer), **diff-parse** (hunk extraction), **config-save** (popup → SW config write), **llm** (callAPI via mock fetch), **sse** (incremental stream parser), **stream-render** (live-preview helpers), **rubric** (acceptance-gate checks), and **linkify** (URL resolution from diffhunk markers).
+The offline suite (`bun run test`) chains twenty suites that never touch the network, `gh`, or `config.local.json`: **logic** (prompt wording, mirror drift), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **refinement** (quality-loop scorer), **diff-parse** (hunk extraction), **config-save** (popup → SW config write), **config-resolve** (stored ↔ file config merge, NaN guard), **pr-update** (GitHub title/body write path via mock fetch), **discovery** (repo-style cache and PR-template discovery), **llm** (callAPI via mock fetch), **sse** (incremental stream parser), **stream-render** (live-preview helpers), **rubric** (acceptance-gate checks), **linkify** (URL resolution from diffhunk markers), **popup-text** (popup URL text helpers), **common** (repo-name / PR-number validation guards), **diff-fetch** (PR diff retrieval via mock fetch), and **pr-lists** (commit/file list pagination).
+
+The fetch-based suite (`bun run test:fetch`) chains the four suites that shell out to `gh` and require the `testPr` fixture: **coverage**, **extension**, **full** (commit coverage from description/prompt/both sides), and **pr-creation** (creation-page prompt assembly).
 
 ```bash
 # Run all offline tests
 bun run test
 
-# Individually:
+# Run the fetch-based tests (needs gh + testPr fixture)
+bun run test:fetch
+
+# Run everything
+bun run test:all
+
+# Individually (offline):
 bun run test:logic         # prompt wording & drift guard
 bun run test:parse         # bot stripping / template fidelity
 bun run test:format        # render-quality rules
 bun run test:stream        # SSE chunk parsing
 bun run test:style         # repo-style inference
-bun run test:coverage      # PR description covers commits (uses testPr)
-bun run test:extension     # prompt covers commits (uses testPr)
-bun run test:full          # both + PR structure (uses testPr)
-bun run test:pr-creation   # creation-page prompt assertions
 bun run test:refinement    # quality loop scorer (anchors, size, coverage)
 bun run test:diff-parse    # diff → hunk-range extraction
 bun run test:config-save   # config write path (partial updates, NaN guard)
+bun run test:config-resolve # stored ↔ file config merge, NaN guard
+bun run test:pr-update     # GitHub title/body write path (mock fetch)
+bun run test:discovery     # repo-style cache & PR-template discovery
 bun run test:llm           # callAPI over mocked fetch (retries, JSON/SSE)
 bun run test:sse           # incremental SSE parser
 bun run test:stream-render # streaming-render helpers in the content script
 bun run test:rubric        # acceptance-gate checks against generated output
 bun run test:linkify       # diffhunk → GitHub URL resolution + bare-ref stripping
+bun run test:popup-text    # popup URL text helpers (trailing-slash stripping)
+bun run test:common        # repo-name / PR-number validation guards
+bun run test:diff-fetch    # PR diff retrieval over mocked fetch
+bun run test:pr-lists      # commit/file list pagination
+
+# Individually (fetch-based, uses testPr):
+bun run test:coverage      # PR description covers commits
+bun run test:extension     # prompt covers commits
+bun run test:full          # both + PR structure
+bun run test:pr-creation   # creation-page prompt assertions
 ```
 
 ### Live labs (hit the real LLM endpoint — not part of `bun run test`)
@@ -279,12 +298,12 @@ bun run test:e2e   # loads dist/ as an unpacked extension: service worker regist
 
 ### Test Output
 
-Tests will output:
+The fetch-based suites (`bun run test:fetch`) will output:
 - List of all commits in the test PR
 - Coverage analysis showing which commits are mentioned in the PR description
 - Pass/fail status based on coverage threshold (90% = pass, 70% = partial, <70% = fail)
 
-The test uses GitHub CLI (`gh`) to fetch PR data, so you need:
+They use GitHub CLI (`gh`) to fetch PR data, so you need:
 1. `gh` installed and authenticated (`gh auth login`)
 2. A valid `githubToken` in config with `repo` scope
 
@@ -349,7 +368,7 @@ github-pr-generator/
 │   ├── extension-e2e.ts           # real Chromium: popup + content-script smoke
 │   ├── pr-lab.ts                  # single-PR live generate/refine/score lab
 │   └── pr-lab-parallel.ts         # all top-10 active repos in parallel
-├── config.local.json              # Your API config (gitignored, copied to dist/ if present)
+├── config.local.json              # Your API config (gitignored; copied to dist/ with secrets stripped)
 ├── config.local.example.json      # Config template (tracked)
 ├── .gitignore
 └── icons/
@@ -397,7 +416,6 @@ git checkout -b feature/your-feature-name
 
 ### Ideas for Contributions
 
-- Support for streaming API responses
 - Custom prompt templates
 - Support for more API providers (Anthropic, Google, etc.)
 - Better error recovery and retry logic
@@ -409,7 +427,7 @@ git checkout -b feature/your-feature-name
 
 Found a bug or have a feature request?
 
-[Open an issue](https://github.com/your-username/github-pr-generator/issues)
+[Open an issue](https://github.com/ahmedhosnypro/github-pr-generator/issues)
 
 Please include:
 

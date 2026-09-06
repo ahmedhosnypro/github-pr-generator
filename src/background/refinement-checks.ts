@@ -1,6 +1,5 @@
 // Deterministic quality checks for generated PR descriptions, consumed by the
-// refinement loop (refinement.ts) and by tests. Kept out of refinement.ts to
-// stay under the sonarjs/max-lines budget. Each check returns null on pass.
+// refinement loop (refinement.ts) and by tests. Each check returns null on pass.
 
 import type { PRStats } from "../types";
 
@@ -76,14 +75,18 @@ function checkBoldLabelBullets(description: string, stats: PRStats | null): Chec
   return null;
 }
 
-function checkAnchors(description: string): CheckResult | null {
+// The anchor floor scales with file count (mirroring the rubric in
+// tests/pr-lab-rubric.ts): a 1-file PR needs only 1 link — demanding 3 there
+// forces duplicated links, contradicting the compact-small-diff rule.
+function checkAnchors(description: string, stats: PRStats | null): CheckResult | null {
   const anchorCount = (description.match(/diffhunk:\/\//g) ?? []).length;
   // Bare [[N]] markers without the diffhunk:// URL link silently break the
   // anchors' whole purpose — detect them separately.
   const bareMarkers = (description.match(/\[\[\d+\]\]\s*(?!\()/g) ?? []).length;
   const failures: Array<{ check: string; detail: string }> = [];
-  if (anchorCount < 3) {
-    failures.push({ check: "anchors", detail: `${anchorCount} anchors` });
+  const required = stats ? Math.min(3, Math.max(1, stats.files)) : 3;
+  if (anchorCount < required) {
+    failures.push({ check: "anchors", detail: `${anchorCount} anchors (needs ${required})` });
   }
   if (bareMarkers > 0) {
     failures.push({ check: "anchors", detail: `${bareMarkers} bare [[N]] refs without links` });
@@ -188,20 +191,7 @@ function checkEnding(description: string): CheckResult | null {
     .slice(-3)
     .join(" ");
   if (!ARTIFACT_ENDING_RE.test(tail)) {
-    return {
-      score: 0,
-      failures: [
-        {
-          check: "ending",
-          detail: `ends: ${description
-            .split("\n")
-            .filter((l) => l.trim())
-            .slice(-3)
-            .join(" ")
-            .slice(0, 80)}`,
-        },
-      ],
-    };
+    return { score: 0, failures: [{ check: "ending", detail: `ends: ${tail.slice(0, 80)}` }] };
   }
   return null;
 }
@@ -255,33 +245,44 @@ function checkCommitCoverage(description: string, commitMessages: string[]): Che
   return null;
 }
 
+export type ScoreMode = "full" | "preserve-authored";
+
 export async function scoreDescription(
   description: string,
   commitMessages: string[] = [],
   hasAnchors = true,
   stats: PRStats | null = null,
+  mode: ScoreMode = "full",
 ): Promise<{
   score: number;
   maxScore: number;
   failures: Array<{ check: string; detail: string }>;
 }> {
-  const checks: Check[] = [
-    checkOpener,
-    checkSummarySentences,
-    (desc: string) => checkBoldLabelBullets(desc, stats),
-    // Only demand anchors when the PR actually has usable anchor targets; the
-    // generation prompt forbids emitting diffhunk links when none were scraped.
-    ...(hasAnchors ? [checkAnchors] : []),
-    ...(stats ? [(desc: string) => checkProportionalSize(desc, stats)] : []),
+  // "preserve-authored" runs only the checks that never force restructuring of
+  // the author's prose, so maxScore is always 6 in that mode.
+  const polish: Check[] = [
     (desc: string) => checkTestingSteps(desc, stats),
     (desc: string) => checkFences(desc, stats),
     checkLineLength,
-    checkBulletWords,
     checkEnding,
     (desc: string) => checkTestingFormat(desc, stats),
     checkExpectedLineLength,
-    (desc: string) => checkCommitCoverage(desc, commitMessages),
   ];
+  const checks: Check[] =
+    mode === "preserve-authored"
+      ? polish
+      : [
+          checkOpener,
+          checkSummarySentences,
+          (desc: string) => checkBoldLabelBullets(desc, stats),
+          // Only demand anchors when the PR actually has usable target anchors.
+          ...(hasAnchors ? [(desc: string) => checkAnchors(desc, stats)] : []),
+          ...(stats ? [(desc: string) => checkProportionalSize(desc, stats)] : []),
+          ...polish.slice(0, 3),
+          checkBulletWords,
+          ...polish.slice(3),
+          (desc: string) => checkCommitCoverage(desc, commitMessages),
+        ];
 
   let score = 0;
   const failures: Array<{ check: string; detail: string }> = [];

@@ -122,7 +122,6 @@ export type {
   GenerateResponse,
   GenerateTitleResponse,
   GetConfigResponse,
-  GetStoredConfigResponse,
   MessageErrorResponse,
   SaveConfigResponse,
 } from "./responses";

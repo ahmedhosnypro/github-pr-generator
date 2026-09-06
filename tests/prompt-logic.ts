@@ -1,5 +1,5 @@
 import { stripBotArtifacts } from "../src/background/bot-artifacts";
-import { buildCombinedPrompt as buildSrcCombinedPrompt } from "../src/background/prompts/combined";
+import { buildCombinedPrompt as buildSrcCombinedPrompt, MAX_PROMPT_CHARS } from "../src/background/prompts/combined";
 import { isLikelyTemplate } from "../src/background/prompts/common";
 import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../src/background/prompts/merge-prompts";
 import { buildDescriptionOnlyPrompt, buildTitleOnlyPrompt } from "../src/background/prompts/pr-prompts";
@@ -136,6 +136,31 @@ function testBotStrippingSmoke(): void {
   expectExcludes("category bullet header stripped", cleaned, "**Bug Fixes**");
   expectIncludes("real content kept", cleaned, "Real fix.");
   expectMatch("kubernetes template survives stripping", stripBotArtifacts(K8S_TEMPLATE), K8S_TEMPLATE);
+
+  // AI-disclosure mandate (repo-style.ts aiDisclosure): a truthful disclosure
+  // answer must survive stripping, while bot-only artifacts still go.
+  const disclosure = "## Summary\nReal fix.\n\n- [x] This code was generated with Claude.\n";
+  expectExcludes("disclosure answer stripped by default", stripBotArtifacts(disclosure), "generated with Claude");
+  expectIncludes(
+    "disclosure answer kept when template mandates it",
+    stripBotArtifacts(disclosure, { preserveAiDisclosure: true }),
+    "generated with Claude",
+  );
+  const trailer = "## Summary\nReal fix.\n\nCo-Authored-By: Copilot <[EMAIL_REDACTED]>\n";
+  expectExcludes("AI trailer stripped by default", stripBotArtifacts(trailer), "Co-Authored-By");
+  expectIncludes(
+    "AI trailer kept when template mandates disclosure",
+    stripBotArtifacts(trailer, { preserveAiDisclosure: true }),
+    "Co-Authored-By: Copilot",
+  );
+  const botTrailer = "## Summary\nReal fix.\n\nCo-Authored-By: coderabbitai[bot] <[EMAIL_REDACTED]>\n";
+  expectExcludes(
+    "review-bot trailer still stripped when disclosure is mandated",
+    stripBotArtifacts(botTrailer, { preserveAiDisclosure: true }),
+    "coderabbitai",
+  );
+  const withBotMandated = stripBotArtifacts(withBot, { preserveAiDisclosure: true });
+  expectExcludes("bot header still stripped when disclosure is mandated", withBotMandated, "CodeRabbit");
 }
 
 function testScreenshotsHint(): void {
@@ -196,6 +221,19 @@ function testMergePrompts(): void {
   expectIncludes("merge desc tells model not to use diffhunk links", desc, "Do NOT include diff hunk references");
 }
 
+function testPromptBudgetCap(): void {
+  const bullet = "- [m] src/" + "module/component/feature/widget/".repeat(12) + "file.ts (+12/-3)\n";
+  let hugeSummary = "## Changed Files\n\n";
+  while (hugeSummary.length <= 200_000) {
+    hugeSummary += bullet;
+  }
+  const capped = buildSrcCombinedPrompt(hugeSummary, "");
+  expectMatch("oversized summary stays within budget", capped.length <= MAX_PROMPT_CHARS + 120, true);
+  expectIncludes("truncation note present", capped, "... (truncated: prompt budget reached");
+  expectIncludes("output-format tail survives", capped, "OUTPUT FORMAT:");
+  expectIncludes("rules tail survives", capped, "RULES:");
+}
+
 console.log("=== Prompt & Logic Unit Tests ===\n");
 testMirrorDrift();
 testTemplateDetection();
@@ -208,6 +246,7 @@ testBotStrippingSmoke();
 testScreenshotsHint();
 testSizeTierNote();
 testMergePrompts();
+testPromptBudgetCap();
 
 const failures = getFailures();
 if (failures > 0) {

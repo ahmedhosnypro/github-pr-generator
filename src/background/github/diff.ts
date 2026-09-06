@@ -1,7 +1,7 @@
 import type { GitHubDiffResult, GitHubErrorResult } from "../../github-types";
 import type { BranchContext, ExtensionConfig } from "../../types";
 import { errorMessage, logMsg } from "../log";
-import { GITHUB_DIFF_ACCEPT, GITHUB_USER_AGENT, isValidRepoName, rateLimitRemaining } from "./common";
+import { GITHUB_DIFF_ACCEPT, GITHUB_USER_AGENT, isValidPrNumber, isValidRepoName, rateLimitRemaining } from "./common";
 import { parseHunkLineRanges, truncateDiff } from "./diff-parse";
 
 async function diffFailure(response: Response): Promise<GitHubErrorResult | null> {
@@ -100,6 +100,10 @@ async function requestPrDiff(
   repo: string,
   prNumber: string,
 ): Promise<GitHubDiffResult> {
+  if (!isValidPrNumber(prNumber)) {
+    logMsg("Invalid PR number for fallback diff fetch: " + prNumber);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
   const url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
   logMsg("Fetching fallback diff from: " + url);
   try {

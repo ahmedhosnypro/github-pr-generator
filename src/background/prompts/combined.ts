@@ -15,7 +15,14 @@ import {
   TITLE_STYLE_GUIDANCE,
 } from "./common";
 
-export function buildCombinedPrompt(changesSummary: string, existingBody: string, style?: RepoStyle): string {
+// Hard ceiling on the assembled prompt: at ~4 chars/token this keeps the
+// request near 30k tokens, leaving completion headroom in the model's
+// context window. The per-field caps (commits, changed files, anchors, diff,
+// template) bound each field but not their sum, which is what this ceiling
+// enforces.
+export const MAX_PROMPT_CHARS = 120_000;
+
+function assemble(changesSummary: string, existingBody: string, style?: RepoStyle): string {
   let prompt = "Generate a GitHub pull request title and description for the following changes.\n\n";
   prompt += changesSummary + "\n";
 
@@ -46,6 +53,30 @@ export function buildCombinedPrompt(changesSummary: string, existingBody: string
   prompt += "RULES:\n";
   prompt += combinedRules();
   return prompt;
+}
+
+export function buildCombinedPrompt(changesSummary: string, existingBody: string, style?: RepoStyle): string {
+  let prompt = assemble(changesSummary, existingBody, style);
+  if (prompt.length <= MAX_PROMPT_CHARS) {
+    return prompt;
+  }
+  const trimmedSummary = truncateToBudget(changesSummary, changesSummary.length - (prompt.length - MAX_PROMPT_CHARS));
+  prompt = assemble(trimmedSummary, existingBody, style);
+  if (prompt.length <= MAX_PROMPT_CHARS) {
+    return prompt;
+  }
+  const trimmedBody = truncateToBudget(existingBody, existingBody.length - (prompt.length - MAX_PROMPT_CHARS));
+  return assemble(trimmedSummary, trimmedBody, style);
+}
+
+// Truncation applies only to changesSummary and existingBody — the
+// OUTPUT FORMAT/RULES tail is never touched. Cut at a newline boundary so
+// the model gets whole lines, then mark the removal so it does not assume
+// the input was complete.
+function truncateToBudget(text: string, keep: number): string {
+  const cut = text.lastIndexOf("\n", Math.max(keep - 1, 0));
+  const prefix = cut > 0 ? text.slice(0, cut) : text.slice(0, Math.max(keep, 0));
+  return prefix + "\n... (truncated: prompt budget reached — remaining input omitted)\n";
 }
 
 function combinedRules(): string {

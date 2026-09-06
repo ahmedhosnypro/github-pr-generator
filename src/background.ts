@@ -1,4 +1,4 @@
-import { CONFIG_STORAGE_KEYS, getConfig } from "./background/config";
+import { getConfig } from "./background/config";
 import { handleSaveConfig } from "./background/config-save";
 import { handleGenerateDescription } from "./background/handlers/description";
 import { handleGenerate } from "./background/handlers/generate";
@@ -6,7 +6,7 @@ import { handleGenerateMergeDescription, handleGenerateMergeTitle } from "./back
 import { handleGenerateTitle } from "./background/handlers/title";
 import { errorMessage, logMsg } from "./background/log";
 import { registerStreamListener } from "./background/stream";
-import type { ExtensionMessage, GetConfigResponse, GetStoredConfigResponse, MessageErrorResponse } from "./types";
+import type { ExtensionMessage, GetConfigResponse, MessageErrorResponse } from "./types";
 
 function relayAsync<T extends object>(
   task: Promise<T>,
@@ -37,13 +37,6 @@ function handleGetConfig(sendResponse: (response: GetConfigResponse) => void): b
       hasGithubToken: !!config.githubToken,
     });
     return undefined;
-  });
-  return true;
-}
-
-function handleGetStoredConfig(sendResponse: (response: GetStoredConfigResponse) => void): boolean {
-  chrome.storage.local.get(CONFIG_STORAGE_KEYS, (stored: GetStoredConfigResponse | null) => {
-    sendResponse(stored || {});
   });
   return true;
 }
@@ -108,8 +101,6 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       return handleGetConfig(sendResponse);
     case "saveConfig":
       return handleSaveConfig(message.data ?? {}, sendResponse);
-    case "getStoredConfig":
-      return handleGetStoredConfig(sendResponse);
     default:
       return relayOpenedPR(message, sendResponse);
   }

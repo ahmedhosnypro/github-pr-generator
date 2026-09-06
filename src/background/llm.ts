@@ -4,34 +4,91 @@ import { errorMessage, logMsg } from "./log";
 import { SYSTEM_PROMPT } from "./prompts/common";
 import { createSSEParser } from "./sse";
 
+// An endpoint that accepts the request and then stalls (or opens SSE and goes
+// silent) would otherwise hang generation forever: the keepalive pings from
+// the content script keep the MV3 worker alive, so nothing else ever times
+// out. Abort when no response/token arrives within this window.
+export const STREAM_STALL_TIMEOUT_MS = 60_000;
+
+// When max_tokens is omitted the provider applies its own default (often
+// small), so long template fills get cut off mid-output and the truncated
+// markdown then fails the downstream fence-balance check in
+// refinement-checks.ts. 8192 covers even long template fills while staying
+// within common per-model output ceilings.
+export const MAX_COMPLETION_TOKENS = 8192;
+
+function stallError(): Error {
+  return new Error("LLM stream stalled: no tokens for " + String(STREAM_STALL_TIMEOUT_MS / 1000) + "s");
+}
+
+function isAbortException(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
+/** Cancellation/stall as a plain descriptive Error — never leak fetch's DOMException AbortError into "network error" paths. */
+function abortErrorFrom(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error && !isAbortException(reason)) return reason;
+  return new Error("Generation aborted");
+}
+
+/** Race a pending fetch/read against the stall watchdog; the timer is cleared on every settle path. */
+function withStallWatchdog<T>(pending: Promise<T>, watchdog: AbortController): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stall = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = stallError();
+      watchdog.abort(err);
+      reject(err);
+    }, STREAM_STALL_TIMEOUT_MS);
+  });
+  return Promise.race([pending, stall]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
 async function postChatCompletion(
   url: string,
   config: ExtensionConfig,
   prompt: string,
   temperature: number,
+  signal: AbortSignal,
+  watchdog: AbortController,
 ): Promise<Response> {
   try {
-    return await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + config.apiKey,
-      },
-      // Always ask for a stream: servers that ignore it answer with plain JSON,
-      // which the fallback path in callAPI handles as before.
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: prompt },
-        ],
-        temperature,
-        stream: true,
-        // "default" omits the field so the provider applies its own effort default.
-        ...(config.thinkingEffort === "default" ? {} : { reasoning_effort: config.thinkingEffort }),
+    return await withStallWatchdog(
+      fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + config.apiKey,
+        },
+        // Caller cancel (tab closed) and the stall watchdog share this signal.
+        signal,
+        // Always ask for a stream: servers that ignore it answer with plain JSON,
+        // which the fallback path in callAPI handles as before.
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: prompt },
+          ],
+          temperature,
+          max_tokens: MAX_COMPLETION_TOKENS,
+          stream: true,
+          // "default" omits the field so the provider applies its own effort default.
+          ...(config.thinkingEffort === "default" ? {} : { reasoning_effort: config.thinkingEffort }),
+        }),
       }),
-    });
+      watchdog,
+    );
   } catch (fetchErr) {
+    if (signal.aborted || isAbortException(fetchErr)) {
+      // Stall watchdog or caller-initiated cancel — distinct from a real network failure.
+      const reason = abortErrorFrom(signal);
+      logMsg("Fetch aborted: " + reason.message);
+      throw reason;
+    }
     logMsg("Fetch failed (network error): " + errorMessage(fetchErr));
     throw new Error("Network error calling API at " + url + ": " + errorMessage(fetchErr), { cause: fetchErr });
   }
@@ -44,7 +101,9 @@ async function assertOkResponse(response: Response, errorBody?: string): Promise
     logMsg("API error body: " + text.substring(0, 300));
     if (response.status === 401 || response.status === 403) {
       throw new Error(
-        "API authentication failed (status " + String(response.status) + "). Check your API key in config.local.json.",
+        "API authentication failed (status " +
+          String(response.status) +
+          "). Check your API key in the extension popup.",
       );
     }
     throw new Error("API error " + String(response.status) + ": " + text.substring(0, 200));
@@ -55,6 +114,8 @@ async function assertOkResponse(response: Response, errorBody?: string): Promise
 async function readStreamedCompletion(
   response: Response,
   onChunk: ((delta: string) => void) | undefined,
+  watchdog: AbortController,
+  signal: AbortSignal,
 ): Promise<string> {
   const parser = createSSEParser();
   const decoder = new TextDecoder();
@@ -70,10 +131,21 @@ async function readStreamedCompletion(
   if (body) {
     const reader = body.getReader();
     for (;;) {
-      // oxlint-disable-next-line no-await-in-loop -- a stream reader is sequential by nature: chunks must be read in order
-      const { done, value } = await reader.read();
-      if (done) break;
-      deliver(parser.push(decoder.decode(value, { stream: true })));
+      let read: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- a stream reader is sequential by nature: chunks must be read in order
+        read = await withStallWatchdog(reader.read(), watchdog);
+      } catch (readErr) {
+        if (signal.aborted) {
+          // Watchdog stall or caller cancel aborted the fetch mid-stream.
+          const reason = abortErrorFrom(signal);
+          logMsg("Stream read aborted: " + reason.message);
+          throw reason;
+        }
+        throw readErr;
+      }
+      if (read.done) break;
+      deliver(parser.push(decoder.decode(read.value, { stream: true })));
     }
     deliver(parser.push(decoder.decode()));
   }
@@ -129,7 +201,13 @@ export async function callAPI(
   onChunk?: (delta: string) => void,
   allowEmptyRetry = true,
   allowTransientRetry = true,
+  callerSignal?: AbortSignal,
 ): Promise<string> {
+  if (callerSignal?.aborted) throw abortErrorFrom(callerSignal);
+  const watchdog = new AbortController();
+  // Caller cancel and the stall watchdog share one signal toward fetch;
+  // AbortSignal.any forwards whichever aborts first, with its reason.
+  const signal = callerSignal ? AbortSignal.any([callerSignal, watchdog.signal]) : watchdog.signal;
   // Normalize "https://host/v1/" → "https://host/v1/chat/completions"; the popup
   // test path strips trailing slashes too, so a "//chat" URL would only ever hit
   // this generation path, not validation.
@@ -148,7 +226,7 @@ export async function callAPI(
   );
 
   const requestStarted = Date.now();
-  const response = await postChatCompletion(url, config, prompt, temperature);
+  const response = await postChatCompletion(url, config, prompt, temperature, signal, watchdog);
   // Transient 5xx/429s — retry once with backoff. The LLM serving layer is
   // flaky enough (observed 503s mid-run) that a single retry saves a refinement
   // iteration from dying to what is a momentary infrastructure hiccup. Gateway
@@ -164,7 +242,7 @@ export async function callAPI(
     if (transient) {
       logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
       await new Promise((r) => setTimeout(r, 2000));
-      return callAPI(config, prompt, temperature, onChunk, allowEmptyRetry, false);
+      return callAPI(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal);
     }
     await assertOkResponse(response, errBody);
   } else {
@@ -175,10 +253,12 @@ export async function callAPI(
   let content: string;
   let fromStream: boolean;
   if (contentType.includes("event-stream")) {
-    content = await readStreamedCompletion(response, onChunk);
+    content = await readStreamedCompletion(response, onChunk, watchdog, signal);
     fromStream = true;
   } else {
-    const json = parseJsonResponseBody(await response.text());
+    // Watchdog covers a body download that never completes; aborting the
+    // fetch cancels response.text() consumption as well.
+    const json = parseJsonResponseBody(await withStallWatchdog(response.text(), watchdog));
     content = json.choices?.[0]?.message?.content || "";
     fromStream = false;
   }
@@ -189,7 +269,7 @@ export async function callAPI(
     if (allowEmptyRetry) {
       logMsg("No content in API response — retrying once");
       await new Promise((r) => setTimeout(r, 1000));
-      return callAPI(config, prompt, temperature, onChunk, false);
+      return callAPI(config, prompt, temperature, onChunk, false, true, callerSignal);
     }
     logMsg("No content in API response");
     throw new Error("No content in API response");

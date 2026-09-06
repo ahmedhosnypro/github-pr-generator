@@ -1,4 +1,4 @@
-import type { FileConfig, GetStoredConfigResponse, StoredConfig } from "../types";
+import type { FileConfig, StoredConfig } from "../types";
 import {
   apiKeyInput,
   diffEnabledInput,
@@ -8,7 +8,6 @@ import {
   githubTokenInput,
   modelInput,
 } from "./elements";
-import { type BackgroundError, sendToBackground } from "./messaging";
 import { markLoaded } from "./state";
 import { selectThinkingEffort, toThinkingEffort, updateDiffConditionalVisibility } from "./ui";
 import { validateEndpointDebounced } from "./validate";
@@ -24,7 +23,7 @@ const STORAGE_KEYS = [
   "diffMaxBytes",
 ];
 
-/** Popup-side merge of the service-worker copy, direct storage, and config.local.json. */
+/** Popup-side merge of direct storage and config.local.json. */
 interface ResolvedSettings {
   apiEndpoint?: string;
   apiKey?: string;
@@ -54,28 +53,16 @@ function readDirectStorage(): Promise<StoredConfig> {
   });
 }
 
-/** Drops the error-fallback shape from sendToBackground so only real stored values merge. */
-function asStored(raw: GetStoredConfigResponse | BackgroundError | null): StoredConfig {
-  return raw && !("ok" in raw) ? raw : {};
-}
-
-function pickDiffEnabled(sw: StoredConfig, direct: StoredConfig): boolean | string {
-  let result: boolean | string = true;
-  if (direct.diffEnabled !== undefined) result = direct.diffEnabled;
-  if (sw.diffEnabled !== undefined) result = sw.diffEnabled;
-  return result;
-}
-
-function mergeStored(sw: StoredConfig, direct: StoredConfig): ResolvedSettings {
+function applyDefaults(stored: StoredConfig): ResolvedSettings {
   return {
-    apiEndpoint: sw.apiEndpoint || direct.apiEndpoint || "",
-    apiKey: sw.apiKey || direct.apiKey || "",
-    model: sw.model || direct.model || "",
-    githubToken: sw.githubToken || direct.githubToken || "",
-    thinkingEffort: sw.thinkingEffort || direct.thinkingEffort || "default",
-    diffEnabled: pickDiffEnabled(sw, direct),
-    diffMaxLines: sw.diffMaxLines || direct.diffMaxLines || 3000,
-    diffMaxBytes: sw.diffMaxBytes || direct.diffMaxBytes || 100000,
+    apiEndpoint: stored.apiEndpoint || "",
+    apiKey: stored.apiKey || "",
+    model: stored.model || "",
+    githubToken: stored.githubToken || "",
+    thinkingEffort: stored.thinkingEffort || "default",
+    diffEnabled: stored.diffEnabled !== undefined ? stored.diffEnabled : true,
+    diffMaxLines: stored.diffMaxLines || 3000,
+    diffMaxBytes: stored.diffMaxBytes || 100000,
   };
 }
 
@@ -99,7 +86,7 @@ function applyValues(stored: ResolvedSettings, fileConfig: FileConfig | null): v
   diffMaxBytesInput.value = String(stored.diffMaxBytes || fileConfig?.diffMaxBytes || 100000);
   apiKeyInput.placeholder = fileConfig?.apiKey
     ? "(loaded from config.local.json — edit to override)"
-    : "(set in config.local.json)";
+    : "(required — saved in extension storage)";
   githubTokenInput.placeholder = fileConfig?.githubToken
     ? "(loaded from config.local.json — edit to override)"
     : "(optional)";
@@ -108,15 +95,11 @@ function applyValues(stored: ResolvedSettings, fileConfig: FileConfig | null): v
 }
 
 export function loadSettings(): void {
-  const storedPromise = sendToBackground<GetStoredConfigResponse>("getStoredConfig", null).catch(() => null);
-  void Promise.all([storedPromise, readDirectStorage(), readFileConfig()]).then(([swRaw, direct, fileConfig]) => {
-    const sw = asStored(swRaw);
-    const stored = mergeStored(sw, direct);
+  void Promise.all([readDirectStorage(), readFileConfig()]).then(([direct, fileConfig]) => {
+    const stored = applyDefaults(direct);
     // Log presence flags only — never serialize stored config (contains apiKey/githubToken).
     console.log(
-      "[PR Generator popup] load: sw keys=" +
-        String(Object.keys(sw).length) +
-        " direct keys=" +
+      "[PR Generator popup] load: direct keys=" +
         String(Object.keys(direct).length) +
         " file=" +
         (fileConfig ? "present" : "none"),

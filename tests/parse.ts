@@ -95,6 +95,30 @@ function testBoldWrappedTitle(): void {
   );
 }
 
+function testAstralBoundaryTitle(): void {
+  // 99 ASCII chars + an astral emoji as the 100th code point (101 UTF-16
+  // units): code-unit truncation would leave a lone high surrogate behind.
+  const longTitle = "x".repeat(99);
+  const astral = `${longTitle}🚀tail`;
+  const combined = parseCombinedResponse(`${astral}\n\nbody text`);
+  expectIncludes("astral char at code-point 100 kept whole", combined.title, "🚀");
+  expectMatch("no lone surrogate left behind", combined.title.includes("�"), false);
+  const titleOnly = parseTitleOnlyResponse(astral);
+  expectIncludes("title-only astral char kept whole", titleOnly, "🚀");
+  expectMatch("title-only surrogate intact", titleOnly.includes("�"), false);
+  const solid = parseTitleOnlyResponse(`${"x".repeat(98)}🚀end`);
+  expectMatch("truncation stops after whole astral char", solid, `${"x".repeat(98)}🚀e`);
+}
+
+function testLeadingLabelPreserved(): void {
+  const note = parseDescriptionOnlyResponse("Note: something important\n\n## Details\nbody");
+  expectIncludes("meaningful 'Note:' first line kept", note, "Note: something important");
+  const wrapper = parseDescriptionOnlyResponse("Description: \nbody text");
+  expectMatch("bare wrapper line still stripped", wrapper, "body text");
+  const prWrapper = parseDescriptionOnlyResponse("PR Description:\nbody text");
+  expectMatch("PR-description wrapper still stripped", prWrapper, "body text");
+}
+
 function testContentAfterBotBlockSurvives(): void {
   const input = "## Summary by CodeRabbit\n- bot bullets\n- more fill\n\n## Changes\nReal authored content follows.";
   const out = parseDescriptionOnlyResponse(input);
@@ -119,6 +143,8 @@ testCombinedParse();
 testCopilotTrailers();
 testAnchorGuard();
 testBoldWrappedTitle();
+testAstralBoundaryTitle();
+testLeadingLabelPreserved();
 
 const failures = getFailures();
 if (failures > 0) {

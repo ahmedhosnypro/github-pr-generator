@@ -7,7 +7,7 @@ import type {
 } from "../../github-types";
 import type { CommitInfo, ExtensionConfig, FileChange, FileChangeType } from "../../types";
 import { errorMessage, logMsg } from "../log";
-import { makeGitHubHeaders, rateLimitRemaining } from "./common";
+import { isValidPrNumber, makeGitHubHeaders, rateLimitRemaining } from "./common";
 
 interface PageListResult<T> {
   items: T[];
@@ -116,6 +116,11 @@ export async function fetchPRCommits(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRCommitsResult> {
+  if (!isValidPrNumber(prNumber)) {
+    logMsg("Invalid PR number: " + prNumber);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
+
   const baseUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/commits";
   logMsg("Fetching PR commits from: " + baseUrl);
   const result = await fetchAllPages<CommitInfo>(config, baseUrl, "PR commits", mapCommitItem);
@@ -144,6 +149,11 @@ export async function fetchPRFiles(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRFilesResult> {
+  if (!isValidPrNumber(prNumber)) {
+    logMsg("Invalid PR number: " + prNumber);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
+
   const baseUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/files";
   logMsg("Fetching PR files from: " + baseUrl);
   const result = await fetchAllPages<FileChange>(config, baseUrl, "PR files", mapFileItem);

@@ -1,8 +1,8 @@
 /**
  * QUALITY GATE — ported from ~/Projects/siraj/scripts/quality-gate.ts, trimmed for this project.
  *
- * Runs all static checks stage by stage and persists progress to
- * `.quality-gate-state.json`, so a rerun resumes at the first failing stage.
+ * Runs all checks (static analysis, tests, hygiene) stage by stage and persists
+ * progress to `.quality-gate-state.json`, so a rerun resumes at the first failing stage.
  * Use `--fresh` to clear the state and start from the top.
  */
 
@@ -11,7 +11,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const STATE_FILE = join(import.meta.dir, "..", ".quality-gate-state.json");
-const STAGES = ["BASIC_CHECKS", "UNUSED", "DUPLICATES"] as const;
+const STAGES = ["BASIC_CHECKS", "TESTS", "UNUSED", "DUPLICATES"] as const;
 type Stage = (typeof STAGES)[number];
 
 interface QualityState {
@@ -26,6 +26,7 @@ const COMMANDS: Record<Stage, Array<{ command: string; args: string[] }>> = {
     { command: "bun", args: ["run", "biome:check"] },
     { command: "bun", args: ["run", "eslint"] },
   ],
+  TESTS: [{ command: "bun", args: ["run", "test"] }],
   UNUSED: [{ command: "bun", args: ["run", "check:unused"] }],
   DUPLICATES: [{ command: "bun", args: ["run", "check:duplicates"] }],
 };

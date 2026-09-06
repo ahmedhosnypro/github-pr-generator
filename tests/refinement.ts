@@ -61,6 +61,23 @@ async function testAnchorGating(): Promise<void> {
     good.failures.length === 0 && good.score === good.maxScore,
     true,
   );
+
+  // The anchor floor scales with file count (mirroring tests/pr-lab-rubric.ts),
+  // so a 1-file PR isn't forced to duplicate links to reach 3.
+  const oneAnchor =
+    "## Summary\nFixed the token expiry race.\n\n## Changes\n- **Auth** — refresh early [[1]](diffhunk://#diff-aaaa_L1-R2)\n\nScope: 1 file, +5/-2";
+  const oneFile = await scoreDescription(oneAnchor, [], true, SMALL_STATS);
+  expectMatch(
+    "1-file PR passes with a single anchor",
+    oneFile.failures.some((f) => f.check === "anchors"),
+    false,
+  );
+  const threeFiles = await scoreDescription(oneAnchor, [], true, { files: 3, additions: 5, deletions: 2 });
+  expectMatch(
+    "3-file PR still demands 3 anchors",
+    threeFiles.failures.some((f) => f.check === "anchors"),
+    true,
+  );
 }
 
 // Size proportionality (run 13): small diffs get a 200-word cap, others don't.
@@ -218,6 +235,62 @@ function testCommitCoverage(): void {
   expectMatch("threshold: 50 commits is 0.75 (mid-range)", coverageThreshold(50), 0.9 - 30 * 0.005);
 }
 
+const AUTHORED_BODY = [
+  "This fixes the token expiry race I hit while dogfooding the extension.",
+  "",
+  "## Testing",
+  "1. Run the suite",
+  "```bash",
+  "bun run test",
+  "```",
+  "Expected: all green",
+  "",
+  "2. Retry with an expired token",
+  "```bash",
+  "bun run dev",
+  "```",
+  "Expected: request succeeds after refresh",
+  "",
+  "Closes #42",
+].join("\n");
+
+// Preserve-authored mode: when the PR body already carries human-written prose,
+// the scorer must only demand the polish checks (6 max), not the full scaffold.
+async function testPreserveAuthoredMode(): Promise<void> {
+  const preserved = await scoreDescription(AUTHORED_BODY, [], false, null, "preserve-authored");
+  expectMatch(
+    "preserve mode passes authored body without restructuring",
+    preserved.failures.length === 0 && preserved.score === preserved.maxScore && preserved.maxScore === 6,
+    true,
+  );
+
+  const full = await scoreDescription(AUTHORED_BODY, [], false, null);
+  expectMatch(
+    "full mode still demands the scaffold on the same body",
+    full.failures.some((f) => f.check === "opener") && full.failures.some((f) => f.check === "boldLabelBullets"),
+    true,
+  );
+  expectMatch("preserve mode maxScore is smaller than full mode", preserved.maxScore < full.maxScore, true);
+
+  const unbalanced = `${AUTHORED_BODY}\n\`\`\`bash\noops\n`;
+  expectMatch(
+    "unbalanced fence still fails in preserve mode",
+    (await scoreDescription(unbalanced, [], false, null, "preserve-authored")).failures.some(
+      (f) => f.check === "fences",
+    ),
+    true,
+  );
+
+  const withoutTesting = "This fixes the token expiry race I hit while dogfooding the extension.";
+  expectMatch(
+    "missing Testing section still flagged in preserve mode",
+    (await scoreDescription(withoutTesting, [], false, LARGE_STATS, "preserve-authored")).failures.some(
+      (f) => f.check === "testingSteps",
+    ),
+    true,
+  );
+}
+
 async function main(): Promise<void> {
   await testAnchorGating();
   await testProportionalSize();
@@ -225,6 +298,7 @@ async function main(): Promise<void> {
   testProseWrap();
   await testArtifactEnding();
   testCommitCoverage();
+  await testPreserveAuthoredMode();
 
   const failures = getFailures();
   if (failures > 0) {

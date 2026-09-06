@@ -7,7 +7,7 @@ import {
 } from "../types";
 import { errorMessage, logMsg } from "./log";
 
-export const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
+const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
   "apiEndpoint",
   "apiKey",
   "model",
@@ -134,7 +134,7 @@ export function getConfig(): Promise<ExtensionConfig> {
 
 export function validateConfig(config: ExtensionConfig): string | null {
   if (!config.apiEndpoint) return "API endpoint is not configured. Set it in config.local.json or extension popup.";
-  if (!config.apiKey) return "API key is not configured. Set it in config.local.json or extension popup.";
+  if (!config.apiKey) return "API key is not configured. Set it in the extension popup.";
   if (!config.model) return "Model is not configured. Set it in config.local.json or extension popup.";
 
   if (!URL.canParse(config.apiEndpoint)) {

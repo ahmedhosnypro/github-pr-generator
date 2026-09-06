@@ -10,6 +10,7 @@ import { errorMessage, logMsg } from "../log";
 import {
   GITHUB_JSON_ACCEPT,
   GITHUB_USER_AGENT,
+  isValidPrNumber,
   isValidRepoName,
   makeGitHubHeaders,
   rateLimitRemaining,
@@ -38,7 +39,7 @@ function mapPRDetails(prData: GitHubPRApiResponse): GitHubPRDetails {
     title: prData.title || "",
     body: prData.body || "",
     baseBranch: prData.base?.ref ? prData.base.ref : "",
-    headBranch: prData.head?.ref ? prData.head.ref : "",
+    headBranch: prData.head?.label ? prData.head.label : (prData.head?.ref ?? ""),
     additions: prData.additions || 0,
     deletions: prData.deletions || 0,
     changedFiles: prData.changed_files || 0,
@@ -53,6 +54,11 @@ export async function fetchPRDetails(
 ): Promise<FetchPRDetailsResult> {
   if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
     logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
+
+  if (!isValidPrNumber(prNumber)) {
+    logMsg("Invalid PR number - prNumber: " + prNumber);
     return { error: "GITHUB_INVALID_CONTEXT" };
   }
 
@@ -106,6 +112,11 @@ export async function updatePRField(
 
   if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
     logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
+
+  if (!isValidPrNumber(prNumber)) {
+    logMsg("Invalid PR number - prNumber: " + prNumber);
     return { error: "GITHUB_INVALID_CONTEXT" };
   }
 

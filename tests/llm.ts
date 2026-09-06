@@ -1,6 +1,6 @@
 // Unit tests for callAPI (llm.ts): the run 20 empty-stream retry, plus the
 // JSON parse fallback from run 15. Mocks global fetch — no real network.
-import { callAPI } from "../src/background/llm";
+import { callAPI, MAX_COMPLETION_TOKENS, STREAM_STALL_TIMEOUT_MS } from "../src/background/llm";
 import type { ExtensionConfig } from "../src/types";
 import { expectMatch, getFailures } from "./expect-helpers";
 
@@ -33,12 +33,156 @@ function sseFullFactory(): () => Response {
     });
 }
 
+/** SSE body that delivers one chunk and then goes silent forever. */
+function sseStallFactory(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+        // then silence — no further chunks, ever
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+/** Same silent SSE body, but errors when the fetch signal aborts — like real fetch. */
+function sseStallUntilAbortResponse(init: RequestInit | undefined): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+        init?.signal?.addEventListener("abort", () => {
+          controller.error(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+/** Shrink the stall watchdog window so stall tests don't wait out the real 60s. */
+function withFastStallWatchdog(fn: () => Promise<void>): Promise<void> {
+  const original = globalThis.setTimeout;
+  const fast = ((callback: (...args: never[]) => void, delay?: number) =>
+    original(callback, delay === STREAM_STALL_TIMEOUT_MS ? 5 : delay)) as unknown as typeof setTimeout;
+  globalThis.setTimeout = fast;
+  return fn().finally(() => {
+    globalThis.setTimeout = original;
+  });
+}
+
 function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
   const original = globalThis.fetch;
   globalThis.fetch = impl as typeof fetch;
   return fn().finally(() => {
     globalThis.fetch = original;
   });
+}
+
+/** Stalled SSE stream (one chunk, then silence) must abort and reject with a descriptive stall error. */
+async function testStalledStream(): Promise<void> {
+  await withFastStallWatchdog(() =>
+    withFetch(
+      () => Promise.resolve(sseStallFactory()),
+      async () => {
+        let failure: unknown = null;
+        await callAPI(BASE_CONFIG, "prompt").catch((e: unknown) => {
+          failure = e;
+        });
+        expectMatch(
+          "stalled SSE stream rejected by watchdog",
+          failure instanceof Error ? failure.message : null,
+          "LLM stream stalled: no tokens for 60s",
+        );
+      },
+    ),
+  );
+}
+
+/** A server that accepts the POST but never answers at all is caught by the same watchdog at the fetch stage. */
+async function testHungFetch(): Promise<void> {
+  await withFastStallWatchdog(() =>
+    withFetch(
+      () => new Promise<Response>(() => {}),
+      async () => {
+        let failure: unknown = null;
+        await callAPI(BASE_CONFIG, "prompt").catch((e: unknown) => {
+          failure = e;
+        });
+        expectMatch(
+          "never-answering endpoint rejected by watchdog",
+          failure instanceof Error ? failure.message : null,
+          "LLM stream stalled: no tokens for 60s",
+        );
+      },
+    ),
+  );
+}
+
+/** Caller cancel mid-stream: rejection carries the caller's reason and is not re-wrapped as a network error. */
+async function testCallerAbort(): Promise<void> {
+  await withFetch(
+    (_url, init) => Promise.resolve(sseStallUntilAbortResponse(init)),
+    async () => {
+      const caller = new AbortController();
+      const chunks: string[] = [];
+      let failure: unknown = null;
+      await callAPI(
+        BASE_CONFIG,
+        "prompt",
+        0.3,
+        (delta) => {
+          chunks.push(delta);
+          caller.abort(new Error("Generation aborted: user navigated away"));
+        },
+        true,
+        true,
+        caller.signal,
+      ).catch((e: unknown) => {
+        failure = e;
+      });
+      expectMatch(
+        "caller abort surfaces its own reason",
+        failure instanceof Error ? failure.message : null,
+        "Generation aborted: user navigated away",
+      );
+      expectMatch(
+        "abort is not rewrapped as network error",
+        failure instanceof Error && failure.message.includes("Network error"),
+        false,
+      );
+      expectMatch("pre-abort chunks still delivered", chunks.join(""), "partial");
+    },
+  );
+}
+
+function reportOutcome(): void {
+  const failures = getFailures();
+  if (failures > 0) {
+    console.log(`\n❌ ${String(failures)} check(s) FAILED`);
+    process.exit(1);
+  }
+  console.log("\n✅ All LLM-client tests passed");
+}
+
+/** The request body must cap completions at MAX_COMPLETION_TOKENS so long template fills are not truncated. */
+async function testRequestBodyCap(): Promise<void> {
+  let capturedBody: { max_tokens?: number; model?: string; stream?: boolean } = {};
+  await withFetch(
+    (_url, init) => {
+      const body = init?.body;
+      capturedBody = JSON.parse(typeof body === "string" ? body : "") as typeof capturedBody;
+      return Promise.resolve(jsonResponse({ choices: [{ message: { content: "body-captured" } }] }));
+    },
+    async () => {
+      const out = await callAPI(BASE_CONFIG, "prompt");
+      expectMatch("body-captured response parsed", out, "body-captured");
+      expectMatch("request sets max_tokens", capturedBody.max_tokens, MAX_COMPLETION_TOKENS);
+      expectMatch("request still sends model", capturedBody.model, BASE_CONFIG.model);
+      expectMatch("request still asks for stream", capturedBody.stream, true);
+    },
+  );
 }
 
 async function main(): Promise<void> {
@@ -108,12 +252,16 @@ async function main(): Promise<void> {
     },
   );
 
-  const failures = getFailures();
-  if (failures > 0) {
-    console.log(`\n❌ ${String(failures)} check(s) FAILED`);
-    process.exit(1);
-  }
-  console.log("\n✅ All LLM-client tests passed");
+  // Stall watchdog and caller-cancel coverage.
+  await testStalledStream();
+  await testHungFetch();
+  await testCallerAbort();
+
+  // The request body must cap completions at MAX_COMPLETION_TOKENS so long
+  // template fills are not silently truncated by a provider-side default.
+  await testRequestBodyCap();
+
+  reportOutcome();
 }
 
 await main();

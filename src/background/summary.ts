@@ -31,12 +31,31 @@ function changeIndicator(type: FileChangeType): string {
 // thematic coverage.
 const MAX_LISTED_COMMITS = 150;
 
+// Cap the changed-files list: a monorepo PR can carry thousands of entries,
+// and the uncapped bullet list is what pushes the assembled prompt toward
+// 40k tokens. Past a few hundred entries the bullets stop informing the
+// model anyway; the remainder is folded into a note for aggregate coverage.
+const MAX_LISTED_FILES = 300;
+
+// Cap each message: the API returns the full commit body, so one release-note
+// commit can add kilobytes to the prompt, and raw commit text is a mild
+// prompt-injection surface. Only the subject line (the unit coverage analysis
+// cares about) is kept, control characters stripped, length capped.
+const MAX_COMMIT_MESSAGE_LENGTH = 200;
+
+function sanitizeCommitMessage(message: string): string {
+  const subject = message.split("\n", 1)[0] ?? "";
+  const cleaned = subject.replace(/\p{Cc}|\p{Cf}/gu, "");
+  if (cleaned.length <= MAX_COMMIT_MESSAGE_LENGTH) return cleaned;
+  return cleaned.slice(0, MAX_COMMIT_MESSAGE_LENGTH - 3) + "...";
+}
+
 function buildCommitsSection(commits: CommitInfo[] | undefined): string {
   let section = "## Commits\n\n";
   if (commits && commits.length > 0) {
     const listed = commits.slice(0, MAX_LISTED_COMMITS);
     for (const commit of listed) {
-      section += "- " + commit.message + "\n";
+      section += "- " + sanitizeCommitMessage(commit.message) + "\n";
     }
     if (commits.length > listed.length) {
       const rest = commits.length - listed.length;
@@ -51,7 +70,8 @@ function buildCommitsSection(commits: CommitInfo[] | undefined): string {
 function buildChangedFilesSection(fileChanges: FileChange[] | undefined): string {
   let section = "\n## Changed Files\n\n";
   if (fileChanges && fileChanges.length > 0) {
-    for (const file of fileChanges) {
+    const listed = fileChanges.slice(0, MAX_LISTED_FILES);
+    for (const file of listed) {
       section +=
         "- " +
         changeIndicator(file.type) +
@@ -62,6 +82,10 @@ function buildChangedFilesSection(fileChanges: FileChange[] | undefined): string
         "/-" +
         String(file.deletions) +
         ")\n";
+    }
+    if (fileChanges.length > listed.length) {
+      const rest = fileChanges.length - listed.length;
+      section += `(+${String(rest)} more files, not listed — describe them in aggregate rather than itemizing)\n`;
     }
   } else {
     section += "(No file change information available)\n";

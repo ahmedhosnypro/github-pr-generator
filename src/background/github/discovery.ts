@@ -44,6 +44,17 @@ async function writeCache(key: string, style: RepoStyle): Promise<void> {
   }
 }
 
+function isEmptyStyle(style: RepoStyle): boolean {
+  return (
+    style.template === null &&
+    style.titleStyle === null &&
+    style.exampleTitles.length === 0 &&
+    style.length === null &&
+    !style.templateHeavy &&
+    !style.aiDisclosure
+  );
+}
+
 async function fetchTemplateFile(
   config: ExtensionConfig,
   owner: string,
@@ -57,7 +68,19 @@ async function fetchTemplateFile(
   logMsg("PR template fetch " + path + " -> " + String(response.status));
   if (!response.ok) return null;
   const text = await response.text();
-  return text.length > 0 && text.length <= MAX_TEMPLATE_CHARS ? text : null;
+  if (text.length > MAX_TEMPLATE_CHARS) {
+    logMsg(
+      "PR template " +
+        path +
+        " is " +
+        String(text.length) +
+        " chars, over the " +
+        String(MAX_TEMPLATE_CHARS) +
+        " char cap, skipping",
+    );
+    return null;
+  }
+  return text.length > 0 ? text : null;
 }
 
 async function listDir(
@@ -115,7 +138,9 @@ async function firstTemplateInDir(
   dirPath: string,
 ): Promise<string | null> {
   const subEntries = await listDir(config, owner, repo, dirPath);
-  const first = subEntries?.find((e) => e.type === "file" && (e.path ?? "") !== "");
+  const first = subEntries
+    ?.filter((e) => e.type === "file" && (e.path ?? "") !== "")
+    .toSorted((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))[0];
   return first?.path ? fetchTemplateFile(config, owner, repo, first.path) : null;
 }
 
@@ -164,7 +189,10 @@ export async function discoverRepoStyle(config: ExtensionConfig, owner: string, 
       fetchRecentMergedPrs(config, owner, repo),
     ]);
     const style = inferRepoStyle(template, samples);
-    await writeCache(cacheKey, style);
+    // Don't cache an empty result: it usually means a transient failure
+    // (e.g. no token yet), and caching it would poison the session for
+    // CACHE_TTL_MS even after the problem (e.g. missing PAT) is fixed.
+    if (!isEmptyStyle(style)) await writeCache(cacheKey, style);
     return style;
   } catch (error) {
     logMsg("Repo style discovery failed: " + errorMessage(error));

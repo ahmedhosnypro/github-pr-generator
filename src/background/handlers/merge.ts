@@ -11,6 +11,7 @@ import { buildStats, extractLinkedIssues, gatherPRData, getValidatedConfig } fro
 export async function handleGenerateMergeTitle(
   data: OpenedPRData,
   onChunk?: (delta: string) => void,
+  signal?: AbortSignal,
 ): Promise<GenerateMergeTitleResponse> {
   logMsg(
     "handleGenerateMergeTitle - owner: " +
@@ -48,7 +49,7 @@ export async function handleGenerateMergeTitle(
   );
   logMsg("handleGenerateMergeTitle - built mergeTitlePrompt, length: " + String(mergeTitlePrompt.length));
 
-  const llmResult = await callAPI(config, mergeTitlePrompt, 0.3, onChunk);
+  const llmResult = await callAPI(config, mergeTitlePrompt, 0.3, onChunk, undefined, undefined, signal);
   const newTitle = parseTitleOnlyResponse(llmResult);
   logMsg("handleGenerateMergeTitle - parsed title: " + newTitle);
 
@@ -58,6 +59,7 @@ export async function handleGenerateMergeTitle(
 export async function handleGenerateMergeDescription(
   data: OpenedPRData,
   onChunk?: (delta: string) => void,
+  signal?: AbortSignal,
 ): Promise<GenerateMergeDescriptionResponse> {
   logMsg(
     "handleGenerateMergeDescription - owner: " +
@@ -102,8 +104,8 @@ export async function handleGenerateMergeDescription(
   );
   logMsg("handleGenerateMergeDescription - built mergeDescPrompt, length: " + String(mergeDescPrompt.length));
 
-  const llmResult = await callAPI(config, mergeDescPrompt, 0.3, onChunk);
-  const newDescription = parseDescriptionOnlyResponse(llmResult);
+  const llmResult = await callAPI(config, mergeDescPrompt, 0.3, onChunk, undefined, undefined, signal);
+  const newDescription = parseDescriptionOnlyResponse(llmResult, { preserveAiDisclosure: style.aiDisclosure });
   logMsg("handleGenerateMergeDescription - parsed description length: " + String(newDescription.length));
 
   // Same quality loop as the PR description flow: generate → score → refine.
@@ -116,6 +118,9 @@ export async function handleGenerateMergeDescription(
     3, // max iterations
     10, // target score
     buildStats(gathered.prDetails, gathered.fileChanges),
+    undefined,
+    undefined,
+    signal,
   );
   logMsg("handleGenerateMergeDescription - refinement score: " + String(finalScore));
 

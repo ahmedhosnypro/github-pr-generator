@@ -8,6 +8,7 @@ import { callAPI } from "../llm";
 import { logMsg } from "../log";
 import { parseCombinedResponse } from "../parse";
 import { buildCombinedPrompt } from "../prompts/combined";
+import { isLikelyTemplate } from "../prompts/common";
 import { refineDescription } from "../refinement";
 import type { RepoStyle } from "../repo-style";
 import { EMPTY_REPO_STYLE } from "../repo-style";
@@ -40,7 +41,11 @@ function extractDiffOutcome(
   return { diffText: null, hunkRanges: null };
 }
 
-export async function handleGenerate(data: GenerateData, onChunk?: (delta: string) => void): Promise<GenerateResponse> {
+export async function handleGenerate(
+  data: GenerateData,
+  onChunk?: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<GenerateResponse> {
   logMsg(
     "handleGenerate - commits: " +
       String(data.commits ? data.commits.length : 0) +
@@ -69,14 +74,16 @@ export async function handleGenerate(data: GenerateData, onChunk?: (delta: strin
   const changesSummary = buildChangesSummary(data, diffText, hunkRanges);
   logMsg("Built changesSummary, length: " + String(changesSummary.length));
 
-  const combinedPrompt = buildCombinedPrompt(changesSummary, data.existingBody || "", style);
+  const existingBody = data.existingBody ?? "";
+  const preserveAuthored = existingBody.trim().length > 0 && !isLikelyTemplate(existingBody);
+  const combinedPrompt = buildCombinedPrompt(changesSummary, existingBody, style);
   logMsg("Built combinedPrompt, length: " + String(combinedPrompt.length));
 
   logMsg("Generating title + description in single call (streaming to memory)...");
-  const result = await callAPI(config, combinedPrompt, 0.3, onChunk);
+  const result = await callAPI(config, combinedPrompt, 0.3, onChunk, undefined, undefined, signal);
   logMsg("API result length: " + String(result.length));
 
-  const parsed = parseCombinedResponse(result);
+  const parsed = parseCombinedResponse(result, { preserveAiDisclosure: style.aiDisclosure });
   logMsg("Parsed - title: " + parsed.title + ", description length: " + String(parsed.description.length));
 
   // Refine the generated description through quality feedback loop. Anchors
@@ -90,6 +97,9 @@ export async function handleGenerate(data: GenerateData, onChunk?: (delta: strin
     3, // max iterations
     10, // target score
     data.stats ?? null,
+    undefined,
+    preserveAuthored,
+    signal,
   );
   logMsg("Refinement complete: score " + String(finalScore));
 

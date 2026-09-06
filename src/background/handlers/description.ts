@@ -6,6 +6,7 @@ import { resolveDiffLinks } from "../linkify";
 import { callAPI } from "../llm";
 import { logMsg } from "../log";
 import { parseDescriptionOnlyResponse } from "../parse";
+import { isLikelyTemplate } from "../prompts/common";
 import { buildDescriptionOnlyPrompt } from "../prompts/pr-prompts";
 import { refineDescription } from "../refinement";
 import { buildChangesSummary, hasUsableAnchors } from "../summary";
@@ -13,7 +14,7 @@ import type { GatheredPRData } from "./shared";
 import { gatherForFieldUpdate } from "./shared";
 
 const TOKEN_REQUIRED_MESSAGE =
-  "GitHub Personal Access Token is required to update PR description. Set it in config.local.json or extension popup (needs 'repo' scope).";
+  "GitHub Personal Access Token is required to update PR description. Set it in the extension popup (needs 'repo' scope).";
 
 async function applyDescriptionUpdate(
   config: ExtensionConfig,
@@ -42,6 +43,7 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
 
   const existingTitle = gathered.prDetails.title || data.existingTitle || "";
   const existingDescription = data.existingDescription || gathered.prDetails.body || "";
+  const preserveAuthored = existingDescription.trim().length > 0 && !isLikelyTemplate(existingDescription);
 
   // Hydrate missing anchors BEFORE building the summary so the prompt's
   // anchors section and the refinement anchor check see the same set.
@@ -65,7 +67,7 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
   logMsg("handleGenerateDescription - built descPrompt, length: " + String(descPrompt.length));
 
   const llmResult = await callAPI(config, descPrompt);
-  const newDescription = parseDescriptionOnlyResponse(llmResult);
+  const newDescription = parseDescriptionOnlyResponse(llmResult, { preserveAiDisclosure: style.aiDisclosure });
   logMsg("handleGenerateDescription - parsed description length: " + String(newDescription.length));
 
   // Refine the generated description through quality feedback loop
@@ -78,6 +80,8 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
     3, // max iterations
     10, // target score
     stats,
+    undefined,
+    preserveAuthored,
   );
   logMsg("Refinement complete: score " + String(finalScore));
 

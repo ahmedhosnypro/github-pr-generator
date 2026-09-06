@@ -13,31 +13,37 @@ function post(port: chrome.runtime.Port, message: StreamPortMessage): void {
   }
 }
 
-function runRequest(port: chrome.runtime.Port, request: StreamRequest): void {
+function runRequest(port: chrome.runtime.Port, request: StreamRequest, signal: AbortSignal): Promise<void> {
   const onChunk = (delta: string): void => {
     post(port, { kind: "chunk", text: delta });
   };
   let job: Promise<StreamedResult>;
   switch (request.type) {
     case "generate":
-      job = handleGenerate(request.data ?? {}, onChunk);
+      job = handleGenerate(request.data ?? {}, onChunk, signal);
       break;
     case "generateMergeTitle":
-      job = handleGenerateMergeTitle((request.data ?? {}) as OpenedPRData, onChunk);
+      job = handleGenerateMergeTitle((request.data ?? {}) as OpenedPRData, onChunk, signal);
       break;
     case "generateMergeDescription":
-      job = handleGenerateMergeDescription((request.data ?? {}) as OpenedPRData, onChunk);
+      job = handleGenerateMergeDescription((request.data ?? {}) as OpenedPRData, onChunk, signal);
       break;
     default:
       post(port, { kind: "error", error: "Unknown stream request type" });
-      return;
+      return Promise.resolve();
   }
-  job
+  return job
     .then((result) => {
       post(port, { kind: "done", result });
       return undefined;
     })
     .catch((err: unknown) => {
+      if (signal.aborted) {
+        // Intentional cancel on disconnect — the receiver is gone, so posting
+        // an error back would be pure noise.
+        logMsg("stream request aborted (" + request.type + "): " + errorMessage(err));
+        return;
+      }
       logMsg("stream request error (" + request.type + "): " + errorMessage(err));
       post(port, { kind: "error", error: errorMessage(err) });
     });
@@ -52,11 +58,23 @@ function runRequest(port: chrome.runtime.Port, request: StreamRequest): void {
 export function registerStreamListener(): void {
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== STREAM_PORT_NAME) return;
+    const controller = new AbortController();
+    let jobInFlight = false;
+    port.onDisconnect.addListener(() => {
+      if (!jobInFlight || controller.signal.aborted) return;
+      // Tab closed or navigated mid-generation: cancel the LLM work instead
+      // of burning tokens on a result no one will read.
+      logMsg("stream port disconnected mid-generation — aborting in-flight job");
+      controller.abort(new Error("Generation aborted: user navigated away"));
+    });
     port.onMessage.addListener((message: unknown) => {
       // Keepalive pings only need to arrive — receiving them on the port
       // resets the MV3 idle timer during long pre-first-token waits.
       if ((message as { type?: string }).type === "__keepalive_ping__") return;
-      runRequest(port, message as StreamRequest);
+      jobInFlight = true;
+      void runRequest(port, message as StreamRequest, controller.signal).finally(() => {
+        jobInFlight = false;
+      });
     });
   });
 }

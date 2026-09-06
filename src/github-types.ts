@@ -65,7 +65,7 @@ export interface GitHubPRApiResponse {
   title?: string;
   body?: string | null;
   base?: { ref?: string } | null;
-  head?: { ref?: string } | null;
+  head?: { ref?: string; label?: string } | null;
   additions?: number;
   deletions?: number;
   changed_files?: number;

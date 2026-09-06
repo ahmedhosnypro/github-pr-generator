@@ -92,24 +92,49 @@ function loadSavedLogs(bodyEl: Element): void {
   });
 }
 
-// Serializes storage writes so two log() calls in quick succession don't
-// read the same array and both write — losing the first entry silently.
+// Logs are buffered in memory and flushed as one batched read-modify-write —
+// a steady logger (e.g. the 1s page detector) must not translate into a
+// storage write per entry.
+const LOG_FLUSH_DELAY_MS = 2000;
+let pendingLogs: string[] = [];
+let logFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let logWriteChain: Promise<void> = Promise.resolve();
 
-function appendLogToStorage(ts: string): Promise<void> {
+function appendLogsToStorage(lines: string[]): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.get<LogStorage>(LOG_KEY, (result) => {
       const logs = result[LOG_KEY] ?? [];
-      logs.push(ts);
+      logs.push(...lines);
       const trimmed = logs.length > 200 ? logs.slice(-200) : logs;
       chrome.storage.local.set({ [LOG_KEY]: trimmed }, resolve);
     });
   });
 }
 
+function flushLogsToStorage(): void {
+  if (logFlushTimer) {
+    clearTimeout(logFlushTimer);
+    logFlushTimer = null;
+  }
+  if (pendingLogs.length === 0) return;
+  const lines = pendingLogs;
+  pendingLogs = [];
+  logWriteChain = logWriteChain.then(() => appendLogsToStorage(lines));
+}
+
 function saveLogToStorage(msg: string): void {
-  const ts = new Date().toLocaleTimeString() + " | " + msg;
-  logWriteChain = logWriteChain.then(() => appendLogToStorage(ts));
+  pendingLogs.push(new Date().toLocaleTimeString() + " | " + msg);
+  if (logFlushTimer) return;
+  logFlushTimer = setTimeout(flushLogsToStorage, LOG_FLUSH_DELAY_MS);
+}
+
+// Don't lose buffered entries when the tab closes or goes to the background.
+// Guarded so Bun-side unit tests can import this module without a DOM.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushLogsToStorage);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushLogsToStorage();
+  });
 }
 
 export function injectLogToggleButton(): void {

@@ -22,5 +22,14 @@ export function rateLimitRemaining(response: Response): string {
 }
 
 export function isValidRepoName(name: string): boolean {
-  return /^[a-zA-Z0-9_.-]+$/.test(name);
+  // "." and ".." pass the charset check but become path-traversal segments
+  // once interpolated into an API URL.
+  return /^[a-zA-Z0-9_.-]+$/.test(name) && name !== "." && name !== "..";
+}
+
+// PR numbers come from URL scraping and user-facing messages; they must stay
+// plain digits so interpolating them into an API path cannot break out of
+// /pulls/<n>.
+export function isValidPrNumber(prNumber: string): boolean {
+  return /^[1-9]\d*$/.test(prNumber);
 }

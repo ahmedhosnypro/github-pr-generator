@@ -1,5 +1,3 @@
-import type { StoredConfig } from "./types";
-
 /** Response shapes sent back via sendResponse. Every handler may also answer with MessageErrorResponse. */
 export interface KeepaliveResponse {
   ok: true;
@@ -52,5 +50,3 @@ export interface SaveConfigResponse {
   ok: boolean;
   error?: string;
 }
-
-export type GetStoredConfigResponse = StoredConfig;

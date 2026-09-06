@@ -1,23 +1,41 @@
 #!/usr/bin/env bun
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const WORK_DIR = "/home/ahmed/Projects/github-pr-generator";
-const STATE_FILE = join(WORK_DIR, "scratch", "improvement-state.json");
+const ROOT_DIR = join(import.meta.dir, "..");
+const STATE_FILE = join(ROOT_DIR, "scratch", "improve-loop-state.json");
+const CONFIG_FILE = join(ROOT_DIR, "config.local.json");
 
 const RUNS_TO_ANALYZE = 5;
+const MAX_HISTORY = 50;
+const SPIKE_THRESHOLD_MS = 2000;
+
+interface EndpointResult {
+  name: string;
+  url: string;
+  latencyMs: number; // -1 when the request failed
+}
+
+interface LatencySample {
+  iteration: number;
+  timestamp: string;
+  duration_ms: number;
+  endpoints: EndpointResult[];
+}
 
 interface ImprovementState {
   iterations: number;
-  latency_history: Array<{
-    iteration: number;
-    timestamp: string;
-    duration_ms: number;
-    endpoints: Array<{ name: string; latency: number }>;
-  }>;
+  latency_history: LatencySample[];
   improvements: Record<string, string>;
   last_updated: string;
+}
+
+interface LocalConfig {
+  apiEndpoint?: string;
+  apiKey?: string;
+  model?: string;
+  githubToken?: string;
 }
 
 function emptyState(): ImprovementState {
@@ -31,94 +49,131 @@ function emptyState(): ImprovementState {
 
 function loadState(): ImprovementState {
   try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf-8")) as ImprovementState;
+    const parsed = JSON.parse(readFileSync(STATE_FILE, "utf-8")) as Partial<ImprovementState> & {
+      iteration_count?: number;
+    };
+    return {
+      iterations: parsed.iterations ?? parsed.iteration_count ?? 0,
+      latency_history: Array.isArray(parsed.latency_history) ? parsed.latency_history : [],
+      improvements: parsed.improvements ?? {},
+      last_updated: parsed.last_updated ?? new Date().toISOString(),
+    };
   } catch {
     return emptyState();
   }
 }
 
 function saveState(state: ImprovementState): void {
+  mkdirSync(join(ROOT_DIR, "scratch"), { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-async function measureCurrentLatency(): Promise<Array<{ name: string; latency: number }>> {
-  const start = performance.now();
-  const endpoints = [
-    { name: "OpenAI gpt-4", path: "/v1/chat/completions", latency: 0 },
-    { name: "Local model", path: "/v1/chat/completions", latency: 0 },
-  ];
-
-  for (const e of endpoints) {
-    try {
-      const response = await fetch(`http://localhost:20128${e.path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "moonshotai/kimi-k3",
-          messages: [{ role: "user", content: "hi" }],
-          stream: false,
-        }),
-      });
-      if (response.ok) {
-        e.latency = performance.now() - start;
-      }
-    } catch {
-      e.latency = -1;
-    }
+function loadConfig(): LocalConfig {
+  if (!existsSync(CONFIG_FILE)) return {};
+  try {
+    return JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as LocalConfig;
+  } catch {
+    return {};
   }
-  return endpoints.filter((e) => e.latency > 0).toSorted((a, b) => a.latency - b.latency);
 }
 
-async function runImprovementCycle(): Promise<{
-  duration: number;
-  endpoints: Array<{ name: string; latency: number }>;
-}> {
-  const startTime = Date.now();
-  const endpoints = await measureCurrentLatency();
+async function measureGitHub(token: string | undefined): Promise<EndpointResult> {
+  const url = "https://api.github.com/rate_limit";
+  const name = "GitHub API";
+  const start = performance.now();
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "github-pr-generator-improve-loop",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
+    return { name, url, latencyMs: response.ok ? Math.round(performance.now() - start) : -1 };
+  } catch {
+    return { name, url, latencyMs: -1 };
+  }
+}
 
-  const duration = Date.now() - startTime;
+async function measureLlm(config: LocalConfig): Promise<EndpointResult> {
+  const name = `LLM (${config.model || "unconfigured"})`;
+  if (!config.apiEndpoint || !config.model) {
+    return { name, url: config.apiEndpoint || "(not configured)", latencyMs: -1 };
+  }
+  const url = `${config.apiEndpoint.replace(/\/+$/, "")}/chat/completions`;
+  const start = performance.now();
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    return { name, url, latencyMs: response.ok ? Math.round(performance.now() - start) : -1 };
+  } catch {
+    return { name, url, latencyMs: -1 };
+  }
+}
+
+async function runCycle(): Promise<EndpointResult[]> {
+  const config = loadConfig();
+  const startedAt = Date.now();
+  const endpoints = await Promise.all([measureGitHub(config.githubToken), measureLlm(config)]);
+  const duration = Date.now() - startedAt;
 
   const state = loadState();
-  state.iterations++;
+  state.iterations += 1;
   state.latency_history.push({
     iteration: state.iterations,
     timestamp: new Date().toISOString(),
     duration_ms: duration,
-    endpoints: endpoints.map((e) => ({ name: e.name, latency: e.latency })),
+    endpoints,
   });
+  if (state.latency_history.length > MAX_HISTORY) {
+    state.latency_history = state.latency_history.slice(-MAX_HISTORY);
+  }
 
-  if (state.latency_history.length > RUNS_TO_ANALYZE) {
+  if (state.latency_history.length >= RUNS_TO_ANALYZE) {
     const recent = state.latency_history.slice(-RUNS_TO_ANALYZE);
-    const avgLatency =
-      recent.reduce((sum: number, run: { duration_ms: number }) => sum + run.duration_ms, 0) / recent.length;
-    if (avgLatency > 2000) {
-      state.improvements[`run_${state.iterations}`] = `Latencies spiked to ${avgLatency}ms — optimization needed`;
+    const avgLatency = recent.reduce((sum, run) => sum + run.duration_ms, 0) / recent.length;
+    if (avgLatency > SPIKE_THRESHOLD_MS) {
+      state.improvements[`run_${state.iterations}`] =
+        `Latencies spiked to ${Math.round(avgLatency)}ms — optimization needed`;
     }
   }
 
+  state.last_updated = new Date().toISOString();
   saveState(state);
 
-  console.log(`[Extension] Iteration ${state.iterations} completed in ${duration}ms`);
-  console.table(endpoints.map((e) => ({ Endpoint: e.name, Latency: `${e.latency}ms` })));
+  console.log(`[Improve Loop] Iteration ${state.iterations} completed in ${duration}ms`);
+  console.table(endpoints.map((e) => ({ Endpoint: e.name, URL: e.url, Latency: `${e.latencyMs}ms` })));
 
-  return { duration, endpoints };
+  return endpoints;
 }
 
-async function main() {
-  const state = loadState();
-  const uptime = Date.now() - new Date(state.last_updated).getTime();
-  console.log(`[Extension Loop] Uptime: ${uptime}ms, Iterations: ${state.iterations}`);
-
-  if (state.iterations > 3) {
-    console.log("[Extension Loop] ✅ Stabilized, running improvement analysts");
-    process.exit(0);
+async function main(): Promise<void> {
+  const endpoints = await runCycle();
+  const failed = endpoints.filter((e) => e.latencyMs < 0);
+  if (failed.length === endpoints.length) {
+    console.error(`[Improve Loop] All ${endpoints.length} endpoints unreachable`);
+    process.exitCode = 1;
+    return;
   }
-
-  await runImprovementCycle();
-
-  setInterval(() => void runImprovementCycle(), 60000);
+  if (failed.length > 0) {
+    console.warn(`[Improve Loop] Unreachable: ${failed.map((e) => e.name).join(", ")}`);
+  }
 }
 
 if (import.meta.main) {
-  main().catch(console.error);
+  main().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

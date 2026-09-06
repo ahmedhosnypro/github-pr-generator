@@ -2,7 +2,7 @@ import type { ExtensionConfig, PRStats } from "../types";
 import { ensureArtifactEnding, wrapLongProseLines } from "./description-normalize";
 import { callAPI } from "./llm";
 import { logMsg } from "./log";
-import { scoreDescription } from "./refinement-checks";
+import { type ScoreMode, scoreDescription } from "./refinement-checks";
 
 const REFINEMENT_PROMPT = (
   hasAnchors: boolean,
@@ -53,6 +53,74 @@ FAILURES: <list of failures with details>
 OUTPUT FORMAT:
 Return ONLY the improved PR description (markdown), nothing else. No commentary, no preamble.`;
 
+const AUTHORED_PRESERVING_PROMPT = `You are finalizing a GitHub PR description whose body already contains the PR author's hand-written text.
+
+ABSOLUTE RULE: The body already carries the PR author's hand-written text, and every sentence of it MUST survive verbatim. Do NOT restructure, rewrite, reorder, or reformat any existing content — not the Summary, not paragraphs, not bullets, not headings, not tables. Your only license is to complete genuinely missing parts (a '## Testing' section with numbered steps and fenced commands; issue links such as 'Closes #N') and to fix the failures listed below with the smallest possible edit.
+
+REDUCED RUBRIC (6 checks — fix every listed failure, change nothing else):
+1. **Testing has numbered steps + fenced commands** - Steps like "1. Run \`cmd\`\nExpected: ...\n\n2. ..."
+2. **Fences balanced** - Every \`\`\` has a closing \`\`\`
+3. **No prose-wall lines** - Prose paragraphs outside fences must stay ≤400 chars; wrap at sentence boundaries. This is the ONLY permitted touch to existing prose, and only for lines over 400 chars.
+4. **Ends on an artifact** - Final line MUST be a verdict line, "Closes #N", "Not verified — reason", or scope accounting (e.g. "Scope: X files, Y additions"). NEVER end with "please review" or similar pleas.
+5. **Command on one line, Expected: on the next** - Never combine a command and its outcome on the same line inside Testing.
+6. **Expected lines ≤400 chars** - Wrap long expected outcomes at sentence boundaries.
+
+INPUT FORMAT:
+---
+TITLE: <pr title>
+DESCRIPTION: <current body; authored prose inside>
+ANCHORS: <true/false>
+STATS: <files and +/- lines>
+SCORE: <current>/<max>
+FAILURES: <failing checks with details>
+---
+
+OUTPUT FORMAT:
+Return ONLY the finished PR description as markdown — no commentary, no preamble.`;
+
+function pickScoreMode(preserveAuthoredBody: boolean): ScoreMode {
+  return preserveAuthoredBody ? "preserve-authored" : "full";
+}
+
+function abortReason(signal: AbortSignal | undefined): string {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error ? reason.message : "cancelled";
+}
+
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false;
+}
+
+function buildIterationPrompt(
+  title: string,
+  description: string,
+  hasAnchors: boolean,
+  stats: PRStats | null,
+  score: number,
+  maxScore: number,
+  failures: Array<{ check: string; detail: string }>,
+  preserveAuthoredBody: boolean,
+): string {
+  const statsText = stats
+    ? `${String(stats.files)} files, +${String(stats.additions)}/-${String(stats.deletions)}`
+    : "unknown";
+  const failuresText = failures.map((f) => `- ${f.check}: ${f.detail}`).join("\n");
+  const rubric = preserveAuthoredBody ? AUTHORED_PRESERVING_PROMPT : REFINEMENT_PROMPT(hasAnchors);
+  return `---
+TITLE: ${title}
+DESCRIPTION: ${description}
+ANCHORS: ${hasAnchors}
+STATS: ${statsText}
+SCORE: ${score}/${maxScore}
+FAILURES:
+${failuresText}
+---
+
+${rubric}
+OUTPUT FORMAT:
+Return ONLY the improved PR description (markdown), nothing else. No commentary, no preamble.`;
+}
+
 export async function refineDescription(
   config: ExtensionConfig,
   title: string,
@@ -63,19 +131,19 @@ export async function refineDescription(
   targetScore = 10,
   stats: PRStats | null = null,
   earlyAccept?: (description: string) => boolean,
+  preserveAuthoredBody = false,
+  signal?: AbortSignal,
 ): Promise<{ description: string; finalScore: number; iterations: number }> {
+  const scoreMode = pickScoreMode(preserveAuthoredBody);
   let currentDescription = ensureArtifactEnding(wrapLongProseLines(description), stats);
-  let currentScore = 0;
-  let maxScore = 0;
   let iterations = 0;
-  let failures: Array<{ check: string; detail: string }> = [];
 
   // Initial score (after the free deterministic fixes, so a long prose line
   // or a missing closing artifact never costs an LLM iteration)
-  const initial = await scoreDescription(currentDescription, commitMessages, hasAnchors, stats);
-  currentScore = initial.score;
-  maxScore = initial.maxScore;
-  failures = initial.failures;
+  const initial = await scoreDescription(currentDescription, commitMessages, hasAnchors, stats, scoreMode);
+  const { maxScore } = initial;
+  let { score: currentScore, failures } = initial;
+  targetScore = Math.min(targetScore, maxScore);
   logMsg(`Initial quality score: ${currentScore}/${maxScore}`);
 
   // Callers with an external acceptance gate (the PR lab's rubric) can stop
@@ -91,26 +159,26 @@ export async function refineDescription(
   let shortRetryUsed = false;
 
   for (let iter = 1; iter <= maxIterations && currentScore < targetScore; iter++) {
+    if (isAborted(signal)) {
+      logMsg("Refinement aborted (caller cancelled): " + abortReason(signal));
+      break;
+    }
     iterations = iter;
     logMsg(`Refinement iteration ${iter}/${maxIterations} (current: ${currentScore}/${maxScore})`);
 
-    const failuresText = failures.map((f) => `- ${f.check}: ${f.detail}`).join("\n");
-    const prompt = `---
-TITLE: ${title}
-DESCRIPTION: ${currentDescription}
-ANCHORS: ${hasAnchors}
-STATS: ${stats ? `${String(stats.files)} files, +${String(stats.additions)}/-${String(stats.deletions)}` : "unknown"}
-SCORE: ${currentScore}/${maxScore}
-FAILURES:
-${failuresText}
----
-
-${REFINEMENT_PROMPT(hasAnchors)}
-OUTPUT FORMAT:
-Return ONLY the improved PR description (markdown), nothing else. No commentary, no preamble.`;
+    const prompt = buildIterationPrompt(
+      title,
+      currentDescription,
+      hasAnchors,
+      stats,
+      currentScore,
+      maxScore,
+      failures,
+      preserveAuthoredBody,
+    );
 
     try {
-      const refined = await callAPI(config, prompt, 0.2);
+      const refined = await callAPI(config, prompt, 0.2, undefined, true, true, signal);
       if (!refined || refined.trim().length < 200) {
         if (!shortRetryUsed) {
           shortRetryUsed = true;
@@ -125,7 +193,7 @@ Return ONLY the improved PR description (markdown), nothing else. No commentary,
       }
 
       const wrapped = ensureArtifactEnding(wrapLongProseLines(refined), stats);
-      const scored = await scoreDescription(wrapped, commitMessages, hasAnchors, stats);
+      const scored = await scoreDescription(wrapped, commitMessages, hasAnchors, stats, scoreMode);
       logMsg(`Iteration ${iter}: score ${scored.score}/${maxScore} (was ${currentScore}/${maxScore})`);
 
       if (scored.score >= currentScore) {

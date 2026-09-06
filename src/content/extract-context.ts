@@ -77,13 +77,6 @@ function applyBranchTextNodes(selector: string, base: string, head: string): [st
   return [base, head];
 }
 
-function stripNamespace(branch: string): string {
-  if (branch.includes(":")) {
-    return branch.split(":").pop() ?? branch;
-  }
-  return branch;
-}
-
 export function extractBranchContext(): BranchContext {
   const url = window.location.href;
   const pathParts = window.location.pathname.split("/").filter((p) => p.length > 0);
@@ -94,8 +87,9 @@ export function extractBranchContext(): BranchContext {
   [baseBranch, headBranch] = applyCompareUrl(url, baseBranch, headBranch);
   [baseBranch, headBranch] = applyBranchTextNodes(".branch-name", baseBranch, headBranch);
   [baseBranch, headBranch] = applyBranchTextNodes(".ref-name", baseBranch, headBranch);
-  headBranch = stripNamespace(headBranch);
-  baseBranch = stripNamespace(baseBranch);
+  // Keep the "forkOwner:branch" namespace on head refs from fork PRs:
+  // the compare API accepts it, and stripping it would compare against a
+  // same-named branch (or nothing) in the base repo instead.
 
   const result: BranchContext = { owner, repo, baseBranch, headBranch };
   log("info", "extractBranchContext - " + JSON.stringify(result));

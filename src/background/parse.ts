@@ -8,6 +8,8 @@ export function countDiffAnchors(text: string): number {
 export interface ParseOptions {
   /** True when the prompt carried an Anchors section — a zero-anchor answer is suspicious then. */
   expectAnchors?: boolean;
+  /** True when the repo's PR template mandates an AI-assistance disclosure (repo-style.ts). */
+  preserveAiDisclosure?: boolean;
 }
 
 function stripFences(text: string): string {
@@ -25,6 +27,13 @@ function stripEdge(title: string, chars: string[]): string {
   return result;
 }
 
+function truncateTitle(title: string): string {
+  if (title.length <= 100) return title;
+  // Slice by code point, not UTF-16 unit, so an astral char at the cap
+  // is kept whole instead of leaving a lone surrogate behind.
+  return Array.from(title).slice(0, 100).join("").trim();
+}
+
 function cleanTitleText(title: string): string {
   let result = stripEdge(title, ['"', "'", "`"]);
   result = result.replace(/^#+\s*/, "");
@@ -37,8 +46,10 @@ function cleanTitleText(title: string): string {
 // Bot/LLM signature stripping lives in bot-artifacts.ts (line classifiers,
 // template-safe). This wrapper only adds the parse-specific removal of
 // "Overview:"-style pseudo-title lines, which can appear anywhere in output.
-function stripBotSignatures(text: string): string {
-  return stripBotArtifacts(text)
+// ParseOptions.preserveAiDisclosure is forwarded so a template-mandated
+// disclosure answer is not deleted before the description ships.
+function stripBotSignatures(text: string, options?: ParseOptions): string {
+  return stripBotArtifacts(text, { preserveAiDisclosure: options?.preserveAiDisclosure })
     .replace(/^Overview:\s*.*$/gim, "")
     .trim();
 }
@@ -61,16 +72,13 @@ function splitTitleAndDescription(cleaned: string): GenerateResponse {
   return { title: cleaned.trim(), description: "" };
 }
 
-export function parseCombinedResponse(text: string, _options?: ParseOptions): GenerateResponse {
-  const cleaned = stripBotSignatures(text);
+export function parseCombinedResponse(text: string, options?: ParseOptions): GenerateResponse {
+  const cleaned = stripBotSignatures(text, options);
   const parsed = splitTitleAndDescription(stripFences(cleaned));
   let { title } = parsed;
 
   title = cleanTitleText(title);
-
-  if (title.length > 100) {
-    title = title.substring(0, 100).trim();
-  }
+  title = truncateTitle(title);
 
   let description = parsed.description;
   description = description.replace(/^Title:.*\n?/i, "");
@@ -84,19 +92,18 @@ export function parseTitleOnlyResponse(text: string): string {
   if (newlineIdx !== -1) {
     title = title.substring(0, newlineIdx).trim();
   }
-  if (title.length > 100) {
-    title = title.substring(0, 100).trim();
-  }
-  return title;
+  return truncateTitle(title);
 }
 
-export function parseDescriptionOnlyResponse(text: string, _options?: ParseOptions): string {
-  const cleaned = stripBotSignatures(text);
+export function parseDescriptionOnlyResponse(text: string, options?: ParseOptions): string {
+  const cleaned = stripBotSignatures(text, options);
   let description = stripFences(cleaned).trim();
   description = description.replace(/^Title:.*\n?/i, "");
   const firstLine = description.split("\n")[0] || "";
+  // Only known wrapper labels (Title/Description/PR Description) are dropped;
+  // a real opener like "Note: ..." must survive.
   if (
-    /^[^:]{1,50}:/i.test(firstLine) &&
+    /^(?:title|description|pr description)\s*:/i.test(firstLine) &&
     firstLine.length < 80 &&
     !firstLine.startsWith("#") &&
     !firstLine.startsWith("-") &&

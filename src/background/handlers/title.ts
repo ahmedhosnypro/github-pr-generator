@@ -10,7 +10,7 @@ import { buildChangesSummary } from "../summary";
 import { gatherForFieldUpdate } from "./shared";
 
 const TOKEN_REQUIRED_MESSAGE =
-  "GitHub Personal Access Token is required to update PR title. Set it in config.local.json or extension popup (needs 'repo' scope).";
+  "GitHub Personal Access Token is required to update PR title. Set it in the extension popup (needs 'repo' scope).";
 
 /** Higher temperature so "fresh" titles actually diverge from the obvious canonical one. */
 const FRESH_TITLE_TEMPERATURE = 0.9;
