@@ -35,7 +35,7 @@
           <div class="field">
             <label class="field-label" for="apiEndpoint">API Endpoint</label>
             <div class="md-text-field field-with-icon">
-              <input type="url" id="apiEndpoint" class="md-text-field__input monospace" placeholder="https://api.example.com/v1" autocomplete="url" aria-describedby="apiEndpointHint apiEndpointError">
+              <input type="url" id="apiEndpoint" class="md-text-field__input monospace" placeholder="https://api.example.com/v1" autocomplete="url" aria-describedby="apiEndpointHint apiEndpointError apiEndpointInsecureWarning">
               <button type="button" class="icon-button" id="validateEndpointBtn" aria-label="Validate API endpoint" title="Validate API endpoint">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
@@ -44,9 +44,10 @@
             </div>
             <span class="field-hint" id="apiEndpointHint">OpenAI-compatible API endpoint (e.g., http://localhost:20128/v1)</span>
             <span class="field-error" id="apiEndpointError" role="alert"></span>
+            <span class="field-warning" id="apiEndpointInsecureWarning" role="alert"></span>
             <div style="margin-top:8px; display:flex; gap:8px;">
               <button type="button" class="md-button md-button--outlined" id="testApiBtn" style="font-size:12px; padding:6px 12px;">Test API</button>
-              <span id="testApiResult" style="font-size:12px; align-self:center; color:var(--md-sys-color-on-surface-variant);"></span>
+              <span id="testApiResult" role="status" aria-live="polite" style="font-size:12px; align-self:center; color:var(--md-sys-color-on-surface-variant);"></span>
             </div>
           </div>
 
@@ -54,7 +55,7 @@
             <label class="field-label" for="apiKey">API Key</label>
             <div class="md-text-field field-with-icon">
               <input type="password" id="apiKey" class="md-text-field__input monospace" placeholder="sk-..." autocomplete="off" aria-describedby="apiKeyHint">
-              <button type="button" class="icon-button visible" id="toggleApiKeyBtn" aria-label="Show/hide API key" title="Show/hide API key">
+              <button type="button" class="icon-button visible" id="toggleApiKeyBtn" aria-label="Show API key" title="Show API key" aria-pressed="false" data-field-label="API key">
                 <svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
                 </svg>
@@ -92,7 +93,7 @@
     <section class="section" aria-labelledby="diffSettingsTitle">
       <div class="section-header">
         <h2 class="section-title" id="diffSettingsTitle">Diff Settings</h2>
-        <button type="button" class="section-toggle" id="diffSettingsToggle" aria-expanded="true" aria-controls="diffSettingsContent">
+        <button type="button" class="section-toggle" id="diffSettingsToggle" aria-expanded="true" aria-controls="diffSettingsContent" aria-label="Toggle diff settings" title="Toggle diff settings">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
           </svg>
@@ -140,7 +141,7 @@
             <label class="field-label" for="githubToken">GitHub Personal Access Token <span class="field-hint" style="display: inline; font-weight: 400; margin-left: 4px;">(optional)</span></label>
             <div class="md-text-field field-with-icon">
               <input type="password" id="githubToken" class="md-text-field__input monospace" placeholder="ghp_..." autocomplete="off" aria-describedby="githubTokenHint">
-              <button type="button" class="icon-button visible" id="toggleGithubTokenBtn" aria-label="Show/hide GitHub token" title="Show/hide GitHub token">
+              <button type="button" class="icon-button visible" id="toggleGithubTokenBtn" aria-label="Show GitHub token" title="Show GitHub token" aria-pressed="false" data-field-label="GitHub token">
                 <svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
                 </svg>
@@ -152,7 +153,7 @@
             <span class="field-hint" id="githubTokenHint">Required for private repos, higher rate limits, and PR updates. Needs <code>repo</code> scope.</span>
             <div style="margin-top:8px; display:flex; gap:8px;">
               <button type="button" class="md-button md-button--outlined" id="testGitHubBtn" style="font-size:12px; padding:6px 12px;">Test GitHub</button>
-              <span id="testGitHubResult" style="font-size:12px; align-self:center; color:var(--md-sys-color-on-surface-variant);"></span>
+              <span id="testGitHubResult" role="status" aria-live="polite" style="font-size:12px; align-self:center; color:var(--md-sys-color-on-surface-variant);"></span>
             </div>
           </div>
 

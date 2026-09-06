@@ -58,22 +58,28 @@ function runRequest(port: chrome.runtime.Port, request: StreamRequest, signal: A
 export function registerStreamListener(): void {
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== STREAM_PORT_NAME) return;
-    const controller = new AbortController();
-    let jobInFlight = false;
+    // One controller per request: a port can carry several jobs in flight, and
+    // a single shared controller would let a disconnect abort the wrong job
+    // (or none, if jobInFlight was cleared by an earlier completion).
+    const inFlight = new Set<AbortController>();
     port.onDisconnect.addListener(() => {
-      if (!jobInFlight || controller.signal.aborted) return;
+      if (inFlight.size === 0) return;
       // Tab closed or navigated mid-generation: cancel the LLM work instead
-      // of burning tokens on a result no one will read.
-      logMsg("stream port disconnected mid-generation — aborting in-flight job");
-      controller.abort(new Error("Generation aborted: user navigated away"));
+      // of burning tokens on results no one will read.
+      logMsg("stream port disconnected mid-generation — aborting " + String(inFlight.size) + " in-flight job(s)");
+      for (const controller of inFlight) {
+        controller.abort(new Error("Generation aborted: user navigated away"));
+      }
+      inFlight.clear();
     });
     port.onMessage.addListener((message: unknown) => {
       // Keepalive pings only need to arrive — receiving them on the port
       // resets the MV3 idle timer during long pre-first-token waits.
       if ((message as { type?: string }).type === "__keepalive_ping__") return;
-      jobInFlight = true;
+      const controller = new AbortController();
+      inFlight.add(controller);
       void runRequest(port, message as StreamRequest, controller.signal).finally(() => {
-        jobInFlight = false;
+        inFlight.delete(controller);
       });
     });
   });

@@ -1,24 +1,25 @@
 // Reusable single-PR lab run, extracted from pr-lab.ts so the parallel runner
 // (pr-lab-parallel.ts) and the one-shot CLI share one code path. Read-only.
+//
+// The data side of the pipeline is the production opened-PR path verbatim:
+// gatherPRData (src/background/handlers/shared.ts) fetches details → commits →
+// files → diff via the same fetchGitHubDiff the extension uses (hunk ranges
+// parsed from the FULL diff, only the prompt text truncated; compare endpoint
+// with /pulls/<n> fallback for deleted head branches), and anchors are
+// hydrated with hydrateMissingDiffAnchors exactly as handleGenerateDescription
+// does before building the summary.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { parseHunkLineRanges, truncateDiff } from "../src/background/github/diff-parse";
+import { hydrateMissingDiffAnchors } from "../src/background/anchor-hash";
 import { discoverRepoStyle } from "../src/background/github/discovery";
+import { buildStats, extractLinkedIssues, gatherPRData } from "../src/background/handlers/shared";
 import { callAPI } from "../src/background/llm";
 import { countDiffAnchors, parseDescriptionOnlyResponse } from "../src/background/parse";
 import { buildDescriptionOnlyPrompt } from "../src/background/prompts/pr-prompts";
 import { refineDescription } from "../src/background/refinement";
 import type { RepoStyle } from "../src/background/repo-style";
-import { buildChangesSummary } from "../src/background/summary";
+import { buildChangesSummary, countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
 import type { ExtensionConfig, ThinkingEffort } from "../src/types";
 import { THINKING_EFFORTS } from "../src/types";
-import {
-  fetchPrCommitMessages,
-  fetchPrDiffText,
-  fetchPrDiffTextDirect,
-  fetchPrFiles,
-  fetchPrInfo,
-  prApiBase,
-} from "./pr-lab-fetch";
 import { scoreDescription } from "./pr-lab-rubric";
 import { loadConfig } from "./shared";
 
@@ -98,18 +99,44 @@ async function discoverRepoStyleCached(config: ExtensionConfig, owner: string, r
   return style;
 }
 
-async function gather(owner: string, repo: string, pr: number, config: ExtensionConfig) {
-  const base = prApiBase(owner, repo, pr);
-  const [info, commits, files, directDiff] = await Promise.all([
-    fetchPrInfo(base, config.githubToken),
-    fetchPrCommitMessages(base, config.githubToken),
-    fetchPrFiles(base, config.githubToken),
-    fetchPrDiffTextDirect(config, owner, repo, pr),
-  ]);
-  const rawDiff = directDiff ?? (await fetchPrDiffText(config, owner, repo, info.baseBranch, info.headBranch, pr));
-  const diffText = rawDiff ? truncateDiff(rawDiff, config.diffMaxLines, config.diffMaxBytes) : null;
-  const hunks = diffText ? parseHunkLineRanges(diffText) : null;
-  return { info, commits, files, diffText, hunks };
+interface LabGeneration {
+  title: string;
+  commits: string[];
+  fileCount: number;
+  diffText: string | null;
+  prompt: string;
+  style: RepoStyle;
+  draftDescription: string;
+  refinedDescription: string;
+  finalScore: number;
+  iterations: number;
+  hasAnchors: boolean;
+}
+
+// Stop refining the moment the description passes the lab's own acceptance
+// rubric — the internal loop targets a stricter 12-point scale whose extra
+// points cost minutes of LLM time without changing the lab verdict.
+function makeLabEarlyAccept(
+  say: (msg: string) => void,
+  title: string,
+  commits: string[],
+  hasAnchors: boolean,
+  fileCount: number,
+): (desc: string) => boolean {
+  return (desc) => {
+    const r = scoreDescription(desc, title, commits, { expectAnchors: hasAnchors, fileCount });
+    if (r.score === 10) return true;
+    say(
+      "rubric " +
+        String(r.score) +
+        "/10, still failing: " +
+        r.checks
+          .filter((c) => !c.ok)
+          .map((c) => c.name + " (" + c.detail + ")")
+          .join("; "),
+    );
+    return false;
+  };
 }
 
 // Extracted from runPrLab to stay under the sonarjs max-lines-per-function cap.
@@ -120,74 +147,68 @@ async function generateAndRefine(
   config: ExtensionConfig,
   say: (msg: string) => void,
   quiet: boolean,
-) {
+): Promise<LabGeneration> {
   // Style discovery (GitHub REST) overlaps the PR data gather — they are
   // independent and both sit on the critical path before the LLM call.
-  const [{ info, commits, files, diffText, hunks }, style] = await Promise.all([
-    gather(owner, repo, pr, config),
+  const [gathered, style] = await Promise.all([
+    gatherPRData("pr-lab", config, { owner, repo, prNumber: String(pr) }),
     discoverRepoStyleCached(config, owner, repo),
   ]);
+  const commits = gathered.commits.map((c) => c.message);
+
+  // Hydrate missing anchors BEFORE building the summary so the prompt's
+  // anchors section and the refinement anchor check see the same set —
+  // mirrors handleGenerateDescription.
+  await hydrateMissingDiffAnchors(gathered.fileChanges);
+
+  const stats = buildStats(gathered.prDetails, gathered.fileChanges);
   const summary = buildChangesSummary(
     {
-      commits: commits.map((message) => ({ message })),
-      fileChanges: files,
-      stats: { files: files.length, additions: info.additions, deletions: info.deletions },
-      branchContext: { owner, repo, baseBranch: info.baseBranch, headBranch: info.headBranch },
-      linkedIssues: [],
-      existingBody: "",
+      commits: gathered.commits,
+      fileChanges: gathered.fileChanges,
+      stats,
+      branchContext: gathered.branchContext,
+      linkedIssues: extractLinkedIssues(gathered.commits),
+      existingBody: gathered.prDetails.body,
     },
-    diffText,
-    hunks,
+    gathered.diffText,
+    gathered.hunkRanges,
   );
-  const prompt = buildDescriptionOnlyPrompt(summary, info.title, "", style);
+  const prompt = buildDescriptionOnlyPrompt(summary, gathered.prDetails.title, gathered.prDetails.body, style);
   say(`generating (prompt ${String(prompt.length)} chars)`);
   const raw = await callAPI(config, prompt, 0.3, quiet ? undefined : () => process.stdout.write("."));
-  const description = parseDescriptionOnlyResponse(raw, { expectAnchors: true });
+  const draftDescription = parseDescriptionOnlyResponse(raw, { preserveAiDisclosure: style.aiDisclosure });
 
   say("refining");
-  // Anchors demandable only when the summary actually carried any. Stats feed
-  // the small-diff leniency (compact outputs skip Changes/Testing scaffolding).
-  const hasAnchors = (diffText !== null && hunks !== null) || files.some((f) => f.diffAnchor.length > 5);
-  const labStats = { files: files.length, additions: info.additions, deletions: info.deletions };
+  // Anchors demandable only when the summary actually carried any — the same
+  // expression the production description handler passes to refineDescription.
+  const hasAnchors = gathered.fileChanges.length > 0 && hasUsableAnchors(gathered.fileChanges, gathered.hunkRanges);
   const {
     description: refinedDescription,
     finalScore,
     iterations,
   } = await refineDescription(
     config,
-    info.title,
-    description,
+    gathered.prDetails.title,
+    draftDescription,
     commits,
     hasAnchors,
     3, // max iterations
     12, // target score — the lab is the acceptance gate; converge fully or report
-    labStats,
-    // Stop refining the moment the description passes the lab's own acceptance
-    // rubric — the internal loop targets a stricter 12-point scale whose extra
-    // points cost minutes of LLM time without changing the lab verdict.
-    (desc) => {
-      const r = scoreDescription(desc, info.title, commits, { expectAnchors: hasAnchors, fileCount: files.length });
-      if (r.score === 10) return true;
-      say(
-        "rubric " +
-          String(r.score) +
-          "/10, still failing: " +
-          r.checks
-            .filter((c) => !c.ok)
-            .map((c) => c.name + " (" + c.detail + ")")
-            .join("; "),
-      );
-      return false;
-    },
+    stats,
+    makeLabEarlyAccept(say, gathered.prDetails.title, commits, hasAnchors, gathered.fileChanges.length),
+    false, // preserveAuthoredBody — the lab judges a full regeneration
+    undefined, // no abort signal in the lab
+    countUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
   );
   return {
-    info,
+    title: gathered.prDetails.title,
     commits,
-    files,
-    diffText,
+    fileCount: gathered.fileChanges.length,
+    diffText: gathered.diffText,
     prompt,
     style,
-    draftDescription: description,
+    draftDescription,
     refinedDescription,
     finalScore,
     iterations,
@@ -267,47 +288,35 @@ export async function runPrLab(
   const artifactBase = `scratch/pr-lab/${owner}-${repo}-${String(pr)}`;
   try {
     say("fetching");
-    const {
-      info,
-      commits,
-      files,
-      diffText,
-      prompt,
-      style,
-      draftDescription,
-      refinedDescription,
-      finalScore,
-      iterations,
-      hasAnchors,
-    } = await generateAndRefine(owner, repo, pr, config, say, quiet);
+    const gen = await generateAndRefine(owner, repo, pr, config, say, quiet);
 
-    const { score, checks } = scoreDescription(refinedDescription, info.title, commits, {
-      expectAnchors: hasAnchors,
-      fileCount: files.length,
+    const { score, checks } = scoreDescription(gen.refinedDescription, gen.title, gen.commits, {
+      expectAnchors: gen.hasAnchors,
+      fileCount: gen.fileCount,
     });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const dir = `${artifactBase}-${stamp}`;
-    writeArtifacts(dir, prompt, draftDescription, refinedDescription, {
+    writeArtifacts(dir, gen.prompt, gen.draftDescription, gen.refinedDescription, {
       score,
-      refinementScore: finalScore,
-      iterations,
-      style,
+      refinementScore: gen.finalScore,
+      iterations: gen.iterations,
+      style: gen.style,
       checks,
     });
-    say(`rubric ${String(score)}/10, refinement ${String(finalScore)} — ${dir}`);
+    say(`rubric ${String(score)}/10, refinement ${String(gen.finalScore)} — ${dir}`);
     return {
       owner,
       repo,
       pr,
-      title: info.title,
+      title: gen.title,
       score,
       maxScore: 10,
-      refinementScore: finalScore,
-      iterations,
-      anchors: countDiffAnchors(refinedDescription),
-      diffChars: diffText?.length ?? 0,
-      fileCount: files.length,
-      commitCount: commits.length,
+      refinementScore: gen.finalScore,
+      iterations: gen.iterations,
+      anchors: countDiffAnchors(gen.refinedDescription),
+      diffChars: gen.diffText?.length ?? 0,
+      fileCount: gen.fileCount,
+      commitCount: gen.commits.length,
       checks,
       durationMs: Date.now() - started,
       artifactDir: dir,

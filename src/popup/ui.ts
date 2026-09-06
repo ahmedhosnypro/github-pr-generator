@@ -7,12 +7,29 @@ export const COLOR_MUTED = "var(--md-sys-color-on-surface-variant)";
 
 let lastSavedTime: Date | null = null;
 
-export function showToast(message: string, type?: string): void {
-  toast.textContent = message;
-  toast.className = "toast show " + (type === "error" ? "toast--error" : "toast--success");
+const TOAST_VISIBLE_MS = 3000;
+const toastQueue: { message: string; type?: string }[] = [];
+let toastShowing = false;
+
+function pumpToastQueue(): void {
+  // One toast at a time, each kept visible for the full duration — a new
+  // message queues instead of cutting the previous one off mid-read.
+  if (toastShowing) return;
+  const next = toastQueue.shift();
+  if (!next) return;
+  toastShowing = true;
+  toast.textContent = next.message;
+  toast.className = "toast show " + (next.type === "error" ? "toast--error" : "toast--success");
   setTimeout(() => {
     toast.classList.remove("show");
-  }, 3000);
+    toastShowing = false;
+    pumpToastQueue();
+  }, TOAST_VISIBLE_MS);
+}
+
+export function showToast(message: string, type?: string): void {
+  toastQueue.push({ message, type });
+  pumpToastQueue();
 }
 
 export function updateLastSaved(): void {
@@ -30,7 +47,11 @@ export function togglePasswordVisibility(input: HTMLInputElement, button: HTMLEl
     eyeOpen.style.display = isPassword ? "none" : "block";
     eyeClosed.style.display = isPassword ? "block" : "none";
   }
-  button.setAttribute("aria-label", isPassword ? "Hide password" : "Show password");
+  // Accessible name stays tied to its own field (data-field-label in the
+  // markup) and pressed state tracks "currently revealed".
+  button.setAttribute("aria-pressed", String(isPassword));
+  const field = button.getAttribute("data-field-label") ?? "password";
+  button.setAttribute("aria-label", (isPassword ? "Hide " : "Show ") + field);
 }
 
 export function updateDiffConditionalVisibility(): void {

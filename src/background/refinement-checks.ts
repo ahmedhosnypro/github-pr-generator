@@ -51,11 +51,13 @@ function checkSummarySentences(description: string): CheckResult | null {
   return null;
 }
 
-// Small diffs (≤3 files, ≤50 changed lines) skip scaffolding entirely per the
+// Small diffs (≤3 files or ≤50 changed lines) skip scaffolding entirely per the
 // size-tier prompt note — Changes/Testing sections are optional on that path.
+// The "or" matches buildSizeTierNote in prompts/common.ts: either signal on its
+// own puts the PR on the compact path. A 0-file/0-line stat block is never small.
 function isSmallDiff(stats: PRStats | null): boolean {
-  if (!stats) return false;
-  return stats.files > 0 && stats.files <= 3 && stats.additions + stats.deletions <= 50;
+  if (!stats || stats.files <= 0) return false;
+  return stats.files <= 3 || stats.additions + stats.deletions <= 50;
 }
 
 function checkBoldLabelBullets(description: string, stats: PRStats | null): CheckResult | null {
@@ -75,18 +77,43 @@ function checkBoldLabelBullets(description: string, stats: PRStats | null): Chec
   return null;
 }
 
-// The anchor floor scales with file count (mirroring the rubric in
-// tests/pr-lab-rubric.ts): a 1-file PR needs only 1 link — demanding 3 there
-// forces duplicated links, contradicting the compact-small-diff rule.
-function checkAnchors(description: string, stats: PRStats | null): CheckResult | null {
-  const anchorCount = (description.match(/diffhunk:\/\//g) ?? []).length;
+// Fence-aware content view: lines inside ``` code fences (and the fence
+// delimiter lines themselves) are replaced with empty strings so line
+// positions survive, while fenced content never counts toward prose, step,
+// or anchor metrics — a pasted log must not pretend to be authored content.
+function stripFencedLines(text: string): string {
+  let inFence = false;
+  return text
+    .split("\n")
+    .map((line) => {
+      if (line.trim().startsWith("```")) {
+        inFence = !inFence;
+        return "";
+      }
+      return inFence ? "" : line;
+    })
+    .join("\n");
+}
+
+// The anchor floor scales with the ACTUAL anchor supply, not just the file
+// count: a PR whose diff yielded 1 usable anchor is asked for 1 link, even if
+// it touched more files. anchorCount is the number of anchor-capable files the
+// prompt offered; null falls back to min(3, files) for callers without it.
+function checkAnchors(
+  description: string,
+  stats: PRStats | null,
+  anchorCount: number | null = null,
+): CheckResult | null {
+  const content = stripFencedLines(description);
+  const linkCount = (content.match(/diffhunk:\/\//g) ?? []).length;
   // Bare [[N]] markers without the diffhunk:// URL link silently break the
   // anchors' whole purpose — detect them separately.
-  const bareMarkers = (description.match(/\[\[\d+\]\]\s*(?!\()/g) ?? []).length;
+  const bareMarkers = (content.match(/\[\[\d+\]\]\s*(?!\()/g) ?? []).length;
   const failures: Array<{ check: string; detail: string }> = [];
-  const required = stats ? Math.min(3, Math.max(1, stats.files)) : 3;
-  if (anchorCount < required) {
-    failures.push({ check: "anchors", detail: `${anchorCount} anchors (needs ${required})` });
+  const supply = anchorCount ?? stats?.files ?? 3;
+  const required = Math.min(3, Math.max(1, supply));
+  if (linkCount < required) {
+    failures.push({ check: "anchors", detail: `${linkCount} anchors (needs ${required})` });
   }
   if (bareMarkers > 0) {
     failures.push({ check: "anchors", detail: `${bareMarkers} bare [[N]] refs without links` });
@@ -106,7 +133,9 @@ function checkTestingSteps(description: string, stats: PRStats | null): CheckRes
     if (isSmallDiff(stats)) return null;
     return { score: 0, failures: [{ check: "testingSteps", detail: "no Testing section" }] };
   }
-  const steps = (testingMatch[1].match(/^\d+\.\s/gm) ?? []).length;
+  // Numbered steps must be authored steps, not lines quoted inside a fenced
+  // example — but the fence requirement itself still looks at the raw content.
+  const steps = (stripFencedLines(testingMatch[1]).match(/^\d+\.\s/gm) ?? []).length;
   const hasFence = /```/.test(testingMatch[1]);
   if (steps < 2 || !hasFence) {
     return { score: 0, failures: [{ check: "testingSteps", detail: `steps=${steps}, fence=${hasFence}` }] };
@@ -120,8 +149,10 @@ function checkTestingFormat(description: string, stats: PRStats | null): CheckRe
     if (isSmallDiff(stats)) return null;
     return { score: 0, failures: [{ check: "testingFormat", detail: "no Testing section" }] };
   }
+  // Any fence language (or a bare fence) is fine — the prompts promise generic
+  // fences, so ```sh / ```console / plain ``` all count as the command block.
   const hasExpectedNextLine =
-    /```bash\n[^`]+```\s*\n\s*Expected:/m.test(testingMatch2[1]) ||
+    /```[^\n]*\n[^`]+```\s*\n\s*Expected:/m.test(testingMatch2[1]) ||
     /^\d+\.\s[^`]+```\s*\n\s*Expected:/m.test(testingMatch2[1]);
   if (!hasExpectedNextLine) {
     return { score: 0, failures: [{ check: "testingFormat", detail: "command+Expected on same line" }] };
@@ -171,7 +202,9 @@ function checkLineLength(description: string): CheckResult | null {
 }
 
 function checkBulletWords(description: string): CheckResult | null {
-  const bullets2 = description.split("\n").filter((l) => /^[-*]\s/.test(l));
+  const bullets2 = stripFencedLines(description)
+    .split("\n")
+    .filter((l) => /^[-*]\s/.test(l));
   const maxWords = bullets2.reduce((m, l) => Math.max(m, l.trim().split(/\s+/).filter(Boolean).length), 0);
   if (maxWords > 60) {
     return { score: 0, failures: [{ check: "bulletWords", detail: `max=${maxWords}` }] };
@@ -180,9 +213,20 @@ function checkBulletWords(description: string): CheckResult | null {
 }
 
 // Accepted closing artifacts: verdict line, issue link, honest "Not verified",
-// a verdict table row, or scope accounting. Shared with the normalizer in
-// description-normalize.ts so normalization and checking can never drift.
-export const ARTIFACT_ENDING_RE = /Closes #|Fixes #|Not verified|verdict|\|[-—\s|]+\||scope/i;
+// a verdict table row, or a scope-accounting line in the exact shape
+// ensureArtifactEnding appends (`Scope: N files, +A/-D`, case-insensitive).
+// Bare prose mentions of the word "scope" do NOT count. Shared with the
+// normalizer in description-normalize.ts so normalization and checking can
+// never drift.
+const ARTIFACT_ENDING_PARTS = [
+  "(?:Closes|Fixes) #",
+  "Not verified",
+  "verdict",
+  String.raw`\|[-—\s|]+\|`,
+  String.raw`scope:\s*\d+\s*files?,\s*\+\d+\s*/\s*-\d+`,
+];
+
+export const ARTIFACT_ENDING_RE = new RegExp(ARTIFACT_ENDING_PARTS.join("|"), "i");
 
 function checkEnding(description: string): CheckResult | null {
   const tail = description
@@ -197,7 +241,9 @@ function checkEnding(description: string): CheckResult | null {
 }
 
 function checkExpectedLineLength(description: string): CheckResult | null {
-  const expectedLines = description.split("\n").filter((l) => /^\s*Expected:/i.test(l));
+  const expectedLines = stripFencedLines(description)
+    .split("\n")
+    .filter((l) => /^\s*Expected:/i.test(l));
   const maxExpectedLen = expectedLines.reduce((m, l) => Math.max(m, l.length), 0);
   if (maxExpectedLen > 400 && expectedLines.length > 0) {
     return { score: 0, failures: [{ check: "expectedLineLength", detail: `max=${maxExpectedLen}` }] };
@@ -206,7 +252,7 @@ function checkExpectedLineLength(description: string): CheckResult | null {
 }
 
 // Corpus "size proportionality" trait: small diffs should get compact output.
-// Only evaluated when stats exist and the diff is small (≤3 files, ≤50 changed
+// Only evaluated when stats exist and the diff is small (≤3 files or ≤50 changed
 // lines); larger diffs get no upper bound from this check.
 function checkProportionalSize(description: string, stats: PRStats): CheckResult | null {
   if (!isSmallDiff(stats)) return null;
@@ -225,19 +271,26 @@ function checkProportionalSize(description: string, stats: PRStats): CheckResult
   return null;
 }
 
-import { countCoveredCommits, coverageThreshold } from "./commit-coverage";
+import { countCoveredCommits, coverageThreshold, listedCommits } from "./commit-coverage";
 
+// Coverage is judged only against the commits the prompt actually listed
+// (MAX_LISTED_COMMITS, commit-coverage.ts): past that cap a 60% requirement on
+// the full array is mathematically unreachable and costs pointless refinement
+// iterations. Unlisted commits are covered thematically per the prompt note.
 function checkCommitCoverage(description: string, commitMessages: string[]): CheckResult | null {
-  if (commitMessages.length === 0) return null;
-  const covered = countCoveredCommits(commitMessages, description);
-  const threshold = coverageThreshold(commitMessages.length);
-  if (covered / commitMessages.length < threshold) {
+  const listed = listedCommits(commitMessages);
+  if (listed.length === 0) return null;
+  const covered = countCoveredCommits(listed, description);
+  const threshold = coverageThreshold(listed.length);
+  if (covered / listed.length < threshold) {
+    const unlisted = commitMessages.length - listed.length;
+    const unlistedNote = unlisted > 0 ? ` (+${String(unlisted)} unlisted, thematic)` : "";
     return {
       score: 0,
       failures: [
         {
           check: "commitCoverage",
-          detail: `${covered}/${commitMessages.length} (needs ${Math.round(threshold * 100)}%)`,
+          detail: `${covered}/${listed.length} listed${unlistedNote} (needs ${Math.round(threshold * 100)}%)`,
         },
       ],
     };
@@ -253,6 +306,7 @@ export async function scoreDescription(
   hasAnchors = true,
   stats: PRStats | null = null,
   mode: ScoreMode = "full",
+  anchorCount: number | null = null,
 ): Promise<{
   score: number;
   maxScore: number;
@@ -276,7 +330,7 @@ export async function scoreDescription(
           checkSummarySentences,
           (desc: string) => checkBoldLabelBullets(desc, stats),
           // Only demand anchors when the PR actually has usable target anchors.
-          ...(hasAnchors ? [(desc: string) => checkAnchors(desc, stats)] : []),
+          ...(hasAnchors ? [(desc: string) => checkAnchors(desc, stats, anchorCount)] : []),
           ...(stats ? [(desc: string) => checkProportionalSize(desc, stats)] : []),
           ...polish.slice(0, 3),
           checkBulletWords,

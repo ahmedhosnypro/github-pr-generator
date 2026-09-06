@@ -1,5 +1,5 @@
 import { buildHouseStyleNote, type RepoStyle } from "../repo-style";
-import { INTENT_TITLES_RULE, TITLE_STYLE_GUIDANCE } from "./common";
+import { enforcePromptBudget, INTENT_TITLES_RULE, TITLE_STYLE_GUIDANCE, wrapUntrustedData } from "./common";
 
 export function buildMergeTitlePrompt(
   changesSummary: string,
@@ -7,21 +7,35 @@ export function buildMergeTitlePrompt(
   existingMergeTitle: string,
   style?: RepoStyle,
 ): string {
+  return enforcePromptBudget(
+    (summary) => assembleMergeTitlePrompt(summary, existingTitle, existingMergeTitle, style),
+    changesSummary,
+  );
+}
+
+function assembleMergeTitlePrompt(
+  changesSummary: string,
+  existingTitle: string,
+  existingMergeTitle: string,
+  style?: RepoStyle,
+): string {
   let prompt = "Generate ONLY a GitHub merge commit title for the following pull request changes.\n\n";
   prompt += "A merge commit title summarizes what the entire PR accomplishes in a single line.\n\n";
+  // changesSummary is already fenced as <untrusted_pr_data> by buildChangesSummary.
   prompt += changesSummary + "\n";
 
   if (existingTitle && existingTitle.trim().length > 0) {
-    prompt += '## PR Title\nThe pull request title is: "' + existingTitle + '"\n';
+    prompt +=
+      "## PR Title (untrusted data)\n" + wrapUntrustedData('The pull request title is: "' + existingTitle + '"');
     prompt +=
       "Use this as a reference. The merge commit title can be similar but should be a clean, concise summary suitable for the git history.\n\n";
   }
 
   if (existingMergeTitle && existingMergeTitle.trim().length > 0) {
     prompt +=
-      '## Existing Merge Commit Title\nThe current merge commit title is: "' +
-      existingMergeTitle +
-      '"\nGenerate an improved version.\n\n';
+      "## Existing Merge Commit Title (untrusted data)\n" +
+      wrapUntrustedData('The current merge commit title is: "' + existingMergeTitle + '"') +
+      "Generate an improved version.\n\n";
   }
 
   if (style) {
@@ -51,28 +65,52 @@ export function buildMergeDescriptionPrompt(
   existingMergeDesc: string,
   style?: RepoStyle,
 ): string {
+  return enforcePromptBudget(
+    (summary, prBody) =>
+      assembleMergeDescriptionPrompt(summary, existingTitle, prBody, existingMergeTitle, existingMergeDesc, style),
+    changesSummary,
+    existingDescription,
+  );
+}
+
+function assembleMergeDescriptionPrompt(
+  changesSummary: string,
+  existingTitle: string,
+  existingDescription: string,
+  existingMergeTitle: string,
+  existingMergeDesc: string,
+  style?: RepoStyle,
+): string {
   let prompt = "Generate ONLY a GitHub merge commit extended description for the following pull request changes.\n\n";
   prompt +=
     "A merge commit extended description provides additional context about the change beyond the title. It should be concise but informative for someone reading the git log.\n\n";
+  // changesSummary is already fenced as <untrusted_pr_data> by buildChangesSummary.
   prompt += changesSummary + "\n";
 
   if (existingTitle && existingTitle.trim().length > 0) {
-    prompt += '## PR Title\nThe pull request title is: "' + existingTitle + '"\n\n';
+    prompt +=
+      "## PR Title (untrusted data)\n" + wrapUntrustedData('The pull request title is: "' + existingTitle + '"') + "\n";
   }
 
   if (existingMergeTitle && existingMergeTitle.trim().length > 0) {
-    prompt += '## Merge Commit Title\nThe merge commit title is: "' + existingMergeTitle + '"\n\n';
+    prompt +=
+      "## Merge Commit Title (untrusted data)\n" +
+      wrapUntrustedData('The merge commit title is: "' + existingMergeTitle + '"') +
+      "\n";
   }
 
   if (existingDescription && existingDescription.trim().length > 0) {
-    prompt += "## PR Description\nThe pull request description is:\n\n" + existingDescription + "\n\n";
+    prompt +=
+      "## PR Description (untrusted data)\nThe pull request description is:\n\n" +
+      wrapUntrustedData(existingDescription) +
+      "\n";
   }
 
   if (existingMergeDesc && existingMergeDesc.trim().length > 0) {
     prompt +=
-      "## Existing Merge Commit Description\nThe current merge commit description is:\n\n" +
-      existingMergeDesc +
-      "\nGenerate an improved version.\n\n";
+      "## Existing Merge Commit Description (untrusted data)\nThe current merge commit description is:\n\n" +
+      wrapUntrustedData(existingMergeDesc) +
+      "Generate an improved version.\n\n";
   }
 
   if (style) {

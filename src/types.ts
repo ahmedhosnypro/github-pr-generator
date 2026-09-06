@@ -114,8 +114,30 @@ export interface OpenedPRData {
   branchContext?: BranchContext;
 }
 
+/**
+ * Payload of the applyTitleUpdate message: the text the user approved in the
+ * opened-PR review panel. The background re-validates everything before the
+ * PATCH and writes exactly `title`.
+ */
+export interface ApplyTitleUpdateData {
+  owner?: string;
+  repo?: string;
+  prNumber?: string;
+  title?: string;
+}
+
+/** Same contract as ApplyTitleUpdateData, for the description body. */
+export interface ApplyDescriptionUpdateData {
+  owner?: string;
+  repo?: string;
+  prNumber?: string;
+  body?: string;
+}
+
 export type { ExtensionMessage } from "./messages";
 export type {
+  ApplyDescriptionResponse,
+  ApplyTitleResponse,
   GenerateDescriptionResponse,
   GenerateMergeDescriptionResponse,
   GenerateMergeTitleResponse,

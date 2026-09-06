@@ -1,10 +1,5 @@
-import {
-  type ExtensionConfig,
-  type FileConfig,
-  type StoredConfig,
-  THINKING_EFFORTS,
-  type ThinkingEffort,
-} from "../types";
+import { resolveConfig } from "../config-resolve";
+import type { ExtensionConfig, FileConfig, StoredConfig } from "../types";
 import { errorMessage, logMsg } from "./log";
 
 const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
@@ -19,6 +14,24 @@ const CONFIG_STORAGE_KEYS: (keyof StoredConfig)[] = [
 ];
 
 let FILE_CONFIG: FileConfig | null = null;
+
+// Keep these bounds in sync with the popup-side clamp in src/popup/save.ts.
+const DIFF_LIMITS = {
+  diffMaxLines: { min: 100, max: 10_000, fallback: 3000 },
+  diffMaxBytes: { min: 10_000, max: 500_000, fallback: 100_000 },
+} as const;
+
+/**
+ * Defensive clamp for resolved diff limits: stored or file values can be
+ * negative (which silently empties every diff), absurdly large, fractional,
+ * or non-numeric via a hand-edited config.local.json.
+ */
+function clampDiffLimit(key: keyof typeof DIFF_LIMITS, value: number): number {
+  const { min, max, fallback } = DIFF_LIMITS[key];
+  const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
 
 async function loadFileConfig(): Promise<void> {
   try {
@@ -44,44 +57,10 @@ async function loadFileConfig(): Promise<void> {
 
 const configLoadPromise = loadFileConfig();
 
-function resolveDiffEnabled(stored: StoredConfig): boolean {
-  if (FILE_CONFIG && FILE_CONFIG.diffEnabled !== undefined) return FILE_CONFIG.diffEnabled;
-  if (stored.diffEnabled !== undefined) return stored.diffEnabled === true || stored.diffEnabled === "true";
-  return true;
-}
-
-function resolveThinkingEffort(stored: StoredConfig): ThinkingEffort {
-  const raw = FILE_CONFIG?.thinkingEffort ?? stored.thinkingEffort;
-  return THINKING_EFFORTS.find((effort) => effort === raw) ?? "default";
-}
-
-function resolveNumberLimit(
-  fileValue: number | undefined,
-  storedValue: number | string | undefined,
-  fallback: number,
-): number {
-  if (fileValue !== undefined) return fileValue;
-  if (storedValue !== undefined) {
-    // Clearing the popup field stores "", which parses to NaN; a NaN limit would
-    // silently disable diff truncation (every comparison against NaN is false).
-    const parsed = Number.parseInt(String(storedValue), 10);
-    if (Number.isNaN(parsed)) return fallback;
-    return parsed;
-  }
-  return fallback;
-}
-
 function mergeConfig(stored: StoredConfig): ExtensionConfig {
-  const config: ExtensionConfig = {
-    apiEndpoint: stored.apiEndpoint || FILE_CONFIG?.apiEndpoint || "",
-    apiKey: stored.apiKey || FILE_CONFIG?.apiKey || "",
-    model: stored.model || FILE_CONFIG?.model || "",
-    githubToken: stored.githubToken || FILE_CONFIG?.githubToken || "",
-    thinkingEffort: resolveThinkingEffort(stored),
-    diffEnabled: resolveDiffEnabled(stored),
-    diffMaxLines: resolveNumberLimit(FILE_CONFIG ? FILE_CONFIG.diffMaxLines : undefined, stored.diffMaxLines, 3000),
-    diffMaxBytes: resolveNumberLimit(FILE_CONFIG ? FILE_CONFIG.diffMaxBytes : undefined, stored.diffMaxBytes, 100000),
-  };
+  const config: ExtensionConfig = resolveConfig(stored, FILE_CONFIG);
+  config.diffMaxLines = clampDiffLimit("diffMaxLines", config.diffMaxLines);
+  config.diffMaxBytes = clampDiffLimit("diffMaxBytes", config.diffMaxBytes);
   logMsg(
     "[BG LOG] getConfig called - stored.apiEndpoint=" +
       (stored.apiEndpoint || "") +

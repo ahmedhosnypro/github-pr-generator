@@ -8,7 +8,7 @@ import type { ExtensionConfig } from "../../types";
 import { errorMessage, logMsg } from "../log";
 import type { PrSample, RepoStyle } from "../repo-style";
 import { EMPTY_REPO_STYLE, inferRepoStyle } from "../repo-style";
-import { GITHUB_RAW_ACCEPT, GITHUB_USER_AGENT, isValidRepoName, makeGitHubHeaders } from "./common";
+import { fetchWithTimeout, GITHUB_RAW_ACCEPT, GITHUB_USER_AGENT, isValidRepoName, makeGitHubHeaders } from "./common";
 
 const TEMPLATE_DIRS = [".github", "docs", ""];
 const TEMPLATE_FILE = /^pull_request_template\.\w+$/i;
@@ -64,7 +64,7 @@ async function fetchTemplateFile(
   const headers: Record<string, string> = { Accept: GITHUB_RAW_ACCEPT, "User-Agent": GITHUB_USER_AGENT };
   if (config.githubToken) headers.Authorization = "Bearer " + config.githubToken;
   const url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + path;
-  const response = await fetch(url, { method: "GET", headers });
+  const response = await fetchWithTimeout(url, { method: "GET", headers });
   logMsg("PR template fetch " + path + " -> " + String(response.status));
   if (!response.ok) return null;
   const text = await response.text();
@@ -90,7 +90,7 @@ async function listDir(
   dir: string,
 ): Promise<GitHubContentsEntry[] | null> {
   const url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents" + (dir === "" ? "" : "/" + dir);
-  const response = await fetch(url, { method: "GET", headers: makeGitHubHeaders(config) });
+  const response = await fetchWithTimeout(url, { method: "GET", headers: makeGitHubHeaders(config) });
   if (!response.ok) return null;
   const entries = (await response.json()) as GitHubContentsEntry[] | { message?: string };
   return Array.isArray(entries) ? entries : null;
@@ -153,7 +153,7 @@ async function fetchRecentMergedPrs(config: ExtensionConfig, owner: string, repo
     repo +
     "/pulls?state=closed&sort=updated&direction=desc&per_page=" +
     String(RECENT_PRS_PER_PAGE);
-  const response = await fetch(url, { method: "GET", headers: makeGitHubHeaders(config) });
+  const response = await fetchWithTimeout(url, { method: "GET", headers: makeGitHubHeaders(config) });
   if (!response.ok) {
     logMsg("Recent merged PRs fetch failed: " + String(response.status));
     return [];

@@ -5,7 +5,7 @@ import { logMsg } from "../log";
 import { parseDescriptionOnlyResponse, parseTitleOnlyResponse } from "../parse";
 import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../prompts/merge-prompts";
 import { refineDescription } from "../refinement";
-import { buildChangesSummary, hasUsableAnchors } from "../summary";
+import { buildChangesSummary } from "../summary";
 import { buildStats, extractLinkedIssues, gatherPRData, getValidatedConfig } from "./shared";
 
 export async function handleGenerateMergeTitle(
@@ -109,12 +109,14 @@ export async function handleGenerateMergeDescription(
   logMsg("handleGenerateMergeDescription - parsed description length: " + String(newDescription.length));
 
   // Same quality loop as the PR description flow: generate → score → refine.
+  // Anchors stay off: the merge prompt forbids diff hunk refs (git log, not the
+  // PR page) and this flow never calls resolveDiffLinks.
   const { description: refinedDescription, finalScore } = await refineDescription(
     config,
     gathered.prDetails.title || data.existingTitle || "",
     newDescription,
     gathered.commits.map((c) => c.message),
-    gathered.fileChanges.length > 0 && hasUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
+    false,
     3, // max iterations
     10, // target score
     buildStats(gathered.prDetails, gathered.fileChanges),

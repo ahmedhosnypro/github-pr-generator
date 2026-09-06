@@ -10,7 +10,7 @@ A Chrome extension that generates pull request titles and descriptions using any
 
 ## Features
 
-### PR Creation Page (`/compare` or `/pull/*/edit`)
+### PR Creation Page (`/compare`)
 
 - Generates PR title and description from commit messages and file changes
 - Two generate buttons: one next to the title field, one in the description toolbar
@@ -96,12 +96,14 @@ Re-run `bun run build` to copy the updated config into `dist/`, or just `bun run
 
 ## Configuration
 
-The extension loads config from two sources, in priority order:
+The extension merges config from two sources. Precedence is **per field** (see `src/background/config.ts`):
 
-| Priority | Source | Description |
-|----------|--------|-------------|
-| 1 | `config.local.json` | File in the extension root (gitignored) |
-| 2 | Extension popup | Saved to `chrome.storage.local` |
+| Fields | Effective precedence |
+|---|---|
+| `apiEndpoint`, `apiKey`, `model`, `githubToken` | Extension popup (`chrome.storage.local`) → `config.local.json` |
+| `thinkingEffort`, `diffEnabled`, `diffMaxLines`, `diffMaxBytes` | `config.local.json` → extension popup → built-in defaults (`default`, `true`, 3000 lines, 100 000 bytes) |
+
+Because the build strips secrets from `dist/`, `apiKey` and `githubToken` must come from the popup. Conversely, setting `thinkingEffort` or any diff setting in `config.local.json` **pins** that value — the corresponding popup control then has no effect, so the example config deliberately leaves those fields unset.
 
 ### config.local.json
 
@@ -133,7 +135,7 @@ cp config.local.example.json config.local.json
 Click the extension icon in Chrome's toolbar to open the modern settings popup. Features:
 
 - **Material Design 3** with light/dark mode (auto-detects browser theme, with manual toggle)
-- Settings saved to `chrome.storage.local` and override `config.local.json`
+- Settings are saved to `chrome.storage.local`. Popup values override `config.local.json` for `apiEndpoint`/`apiKey`/`model`/`githubToken`; for **Thinking Effort** and the **Diff Settings** the file wins when those keys are present in `config.local.json` (the example config omits them so the popup controls stay live)
 - **Test API** button — validates endpoint + key with a quick chat request
 - **Test GitHub** button — validates your PAT against `api.github.com/user`
 - **Thinking Effort** button group (`none`, `default`, `minimal`, `low`, `medium`, `high`, `max`) — sent to the API as `reasoning_effort`; `default` omits the field
@@ -205,7 +207,7 @@ The extension includes local tests: an offline suite that runs anywhere (`bun ru
 
 ### Configuration
 
-Only the fetch-based suite needs configuration. Add a `testPr` section to your `config.local.json`:
+Only the fetch-based suite needs configuration. Add a `testPr` section to your `config.local.json` — only `owner`, `repo`, and `number` are read; anything else (titles, expected stats, ref names) is ignored:
 
 ```json
 {
@@ -216,15 +218,7 @@ Only the fetch-based suite needs configuration. Add a `testPr` section to your `
   "testPr": {
     "owner": "ahmedhosnypro",
     "repo": "siraj",
-    "number": 17,
-    "headRefName": "tests",
-    "baseRefName": "master",
-    "title": "pull",
-    "description": "Test PR for commit coverage validation",
-    "commits": 33,
-    "filesChanged": 118,
-    "additions": 7212,
-    "deletions": 186
+    "number": 17
   }
 }
 ```
@@ -287,6 +281,13 @@ bun run lab:parallel
 bun run test:format-live
 ```
 
+Labs read the same `config.local.json` (they require `apiEndpoint`, `apiKey`, `model`, and `githubToken`) but can override the model and reasoning effort **without touching the extension's settings**:
+
+| Field / env | Effect |
+|---|---|
+| `labModel` | Model for lab runs instead of `model`. The `PR_LAB_MODEL` env var wins over it. |
+| `labEffort` | `reasoning_effort` for lab runs (`none`/`default`/`minimal`/`low`/`medium`/`high`/`max`; anything else falls back to `low`). The `PR_LAB_EFFORT` env var wins over it. |
+
 ### Browser E2E (real Chromium, not in `bun run test`)
 
 ```bash
@@ -303,9 +304,10 @@ The fetch-based suites (`bun run test:fetch`) will output:
 - Coverage analysis showing which commits are mentioned in the PR description
 - Pass/fail status based on coverage threshold (90% = pass, 70% = partial, <70% = fail)
 
-They use GitHub CLI (`gh`) to fetch PR data, so you need:
+They use the GitHub CLI (`gh`) for all PR metadata (title, branches, commits, files, stats); the two prompt-building suites (`test:full`, `test:pr-creation`) additionally fetch the compare diff from the GitHub REST API with your `githubToken` as a Bearer token. You need:
+
 1. `gh` installed and authenticated (`gh auth login`)
-2. A valid `githubToken` in config with `repo` scope
+2. A non-empty `githubToken` in `config.local.json` (the suites refuse to run without one); use a valid PAT with `repo` scope for private repos
 
 ---
 
@@ -341,40 +343,49 @@ Open DevTools (`F12`) on the GitHub page. Look for `[PR Generator v1.6]` prefixe
 ```
 github-pr-generator/
 ├── manifest.json                  # Chrome extension manifest (v3) — copied to dist/ as-is
-├── src/
-│   ├── types.ts                   # Shared message/config/GitHub-API types
-│   ├── background.ts              # Service worker entry (thin) + modules in src/background/
-│   ├── content.ts                 # Content script entry (thin) + modules in src/content/
-│   └── popup/                     # Popup entry, compiled to dist/popup/popup.js
+├── styles.css                     # Content-script button & log-panel styles (copied to dist/)
 ├── popup/
-│   ├── popup.html                 # Settings UI (copied to dist/)
+│   ├── popup.html                 # Settings UI markup (copied to dist/)
 │   └── popup.css                  # Material Design 3 styles (copied to dist/)
-├── styles.css                     # Content-script button & log panel styles (copied to dist/)
+├── icons/                         # Extension icons (SVG sources + generated PNGs)
+├── src/
+│   ├── background.ts              # Service-worker entry (thin; delegates to src/background/)
+│   ├── content.ts                 # Content-script entry (thin; delegates to src/content/)
+│   ├── types.ts / messages.ts / responses.ts / github-types.ts   # shared config/message/API types
+│   ├── background/                # Service-worker modules (config merge, LLM client, SSE/stream parsing,
+│   │   │                          #  prompt assembly, refinement loop, repo-style discovery, …)
+│   │   ├── handlers/              # Message handlers: generate / title / description / merge
+│   │   ├── github/                # GitHub REST client: PR read+update, diff fetch & hunk parsing,
+│   │   │                          #  commit/file list pagination, template & style discovery
+│   │   └── prompts/               # Prompt builders (combined creation, opened-PR, merge)
+│   ├── content/                   # Content-script modules: page detection, button injection and
+│   │                              #  orchestration per page kind (compare-*, opened-*, merge-*),
+│   │                              #  DOM scraping, live streaming into the form
+│   └── popup/                     # Popup modules: state/load/save, messaging, permissions,
+│                                  #  validation, Test API / Test GitHub, theme, UI helpers
 ├── scripts/
-│   ├── build.ts                   # bun build → dist/ + asset copy
+│   ├── build.ts                   # bun build → dist/ + asset copy (strips secrets from config)
+│   ├── dev.ts                     # watch-mode rebuilds
+│   ├── quality-gate.ts            # staged quality gate with resume (see below)
+│   ├── improve-loop.ts            # automated description-improvement loop driver
 │   └── convert-icons.ts           # PNG icon generation from SVG (sharp)
 ├── tests/                         # bun-run TypeScript tests + live labs
-│   ├── prompt-logic.ts            # offline prompt unit tests (wording, drift guard, style notes)
-│   ├── parse.ts                   # bot-signature stripping / template preservation
-│   ├── prompt-format.ts           # render-quality contract assertions
-│   ├── stream-parse.ts            # SSE chunk parsing
-│   ├── repo-style.ts              # repo-style inference tests
-│   ├── refinement.ts              # refinement-loop scorer unit tests
-│   ├── diff-parse.ts              # diff → hunk-range extraction tests
-│   ├── commit-coverage.ts         # PR-description commit coverage (uses testPr fixture)
-│   ├── extension-coverage.ts      # prompt-side commit coverage (uses testPr fixture)
-│   ├── full-coverage.ts           # both coverage angles + structure
-│   ├── pr-creation-prompt.ts      # creation-page prompt assertions
-│   ├── extension-e2e.ts           # real Chromium: popup + content-script smoke
-│   ├── pr-lab.ts                  # single-PR live generate/refine/score lab
-│   └── pr-lab-parallel.ts         # all top-10 active repos in parallel
+│   ├── (offline `bun run test`)   # prompt-logic, parse, prompt-format, stream-parse, repo-style,
+│   │                              #  refinement, diff-parse, config-save, config-resolve, pr-update,
+│   │                              #  discovery, llm, sse, stream-render, rubric, linkify, popup-text,
+│   │                              #  common, diff-fetch, pr-lists
+│   ├── (fetch `bun run test:fetch`)  # commit-coverage, extension-coverage, full-coverage,
+│   │                                 #  pr-creation-prompt — need gh + testPr fixture
+│   ├── shared.ts / testkit.ts / prompt.ts / prompt-mirror.ts / fixtures.ts / expect-helpers.ts
+│   │                              # shared harness: config load, gh fetch, coverage logging
+│   ├── pr-lab*.ts / format-live.ts   # live labs against the real LLM endpoint
+│   └── extension-e2e.ts           # real Chromium E2E (popup + content script)
+├── analysis/                      # PR-corpus analysis, render-quality contract, improvement log
+├── .github/workflows/ci.yml       # CI (see below)
 ├── config.local.json              # Your API config (gitignored; copied to dist/ with secrets stripped)
 ├── config.local.example.json      # Config template (tracked)
 ├── .gitignore
-└── icons/
-    ├── icon16.png
-    ├── icon48.png
-    └── icon128.png
+└── biome.json / eslint.config.mjs / oxlint.config.mts / knip.config.ts / .jscpd.json / tsconfig.json
 ```
 
 ### Development & Code Quality
@@ -394,7 +405,20 @@ bun run quality          # lint + duplicates + unused
 
 Linting enforces, among other rules: `sonarjs/max-lines` 300 lines per file and `sonarjs/max-lines-per-function` 80 lines per function.
 
-`bun run quality-gate` runs the full check pipeline in stages (typecheck → oxlint → biome → eslint → unused → duplicates) and resumes from the first failing stage on rerun; `bun run quality-gate:fresh` starts clean.
+`bun run quality-gate` runs the full check pipeline in stages — **BASIC_CHECKS** (typecheck → oxlint → biome → eslint), **TESTS** (the offline `bun run test` suite), **UNUSED** (knip), **DUPLICATES** (jscpd) — and resumes from the first failing stage on rerun; `bun run quality-gate:fresh` clears the state and starts from the top.
+
+---
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on every push and pull request to `master`:
+
+1. Check out the repo and set up Bun
+2. `bun install --frozen-lockfile`
+3. `bun run quality-gate:fresh` — the full staged gate above (lint + offline tests + hygiene)
+4. `bun run build` — smoke-builds the extension into `dist/`
+
+Only the offline suite runs in CI; the suites that need `gh`, a live LLM endpoint, or a browser (`test:fetch`, labs, E2E) stay local.
 
 
 ---

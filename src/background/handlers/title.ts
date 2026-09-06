@@ -1,4 +1,10 @@
-import type { ExtensionConfig, GenerateTitleResponse, OpenedPRData } from "../../types";
+import type {
+  ApplyTitleResponse,
+  ApplyTitleUpdateData,
+  ExtensionConfig,
+  GenerateTitleResponse,
+  OpenedPRData,
+} from "../../types";
 import { discoverRepoStyle } from "../github/discovery";
 import { updatePRField } from "../github/pr";
 import { callAPI } from "../llm";
@@ -7,7 +13,7 @@ import { parseTitleOnlyResponse } from "../parse";
 import { buildTitleOnlyPrompt } from "../prompts/pr-prompts";
 import type { RepoStyle } from "../repo-style";
 import { buildChangesSummary } from "../summary";
-import { gatherForFieldUpdate } from "./shared";
+import { gatherForFieldUpdate, prepareFieldApply } from "./shared";
 
 const TOKEN_REQUIRED_MESSAGE =
   "GitHub Personal Access Token is required to update PR title. Set it in the extension popup (needs 'repo' scope).";
@@ -70,6 +76,11 @@ async function generateTitleText(
   return newTitle;
 }
 
+/**
+ * Generate phase of the opened-PR title flow: gathers context, calls the LLM
+ * and returns the proposal. Deliberately never PATCHes — the content script
+ * shows the result in a review panel and only applyTitleUpdate (below) writes.
+ */
 export async function handleGenerateTitle(data: OpenedPRData): Promise<GenerateTitleResponse> {
   const { config, gathered, linkedIssues, stats } = await gatherForFieldUpdate(
     "handleGenerateTitle",
@@ -99,17 +110,31 @@ export async function handleGenerateTitle(data: OpenedPRData): Promise<GenerateT
   logMsg("handleGenerateTitle - mode: " + (isFresh ? "fresh" : "improve") + ", current title: " + currentTitle);
 
   const newTitle = await generateTitleText(config, changesSummary, style, currentTitle, isFresh);
-  logMsg("handleGenerateTitle - old title: " + currentTitle + " | new title: " + newTitle);
+  logMsg("handleGenerateTitle - proposal ready, length: " + String(newTitle.length));
 
-  const updateResult = await updatePRField(config, gathered.owner, gathered.repo, gathered.prNumber, {
-    title: newTitle,
-  });
+  return { title: newTitle, updated: false };
+}
+
+/**
+ * Apply phase: the user reviewed (and possibly edited) the proposal and clicked
+ * "Apply to PR". PATCHes exactly the approved text — nothing from the LLM
+ * reaches GitHub without going through this handler.
+ */
+export async function handleApplyTitleUpdate(data: ApplyTitleUpdateData): Promise<ApplyTitleResponse> {
+  const { config, owner, repo, prNumber, text } = await prepareFieldApply(
+    "handleApplyTitleUpdate",
+    data,
+    "title",
+    data.title,
+    TOKEN_REQUIRED_MESSAGE,
+  );
+
+  const updateResult = await updatePRField(config, owner, repo, prNumber, { title: text });
   if ("error" in updateResult) {
     if (updateResult.error === "GITHUB_NO_TOKEN") {
       throw new Error(TOKEN_REQUIRED_MESSAGE);
     }
     throw new Error("Failed to update PR title: " + (updateResult.message || updateResult.error));
   }
-
-  return { title: newTitle, updated: true };
+  return { title: text, updated: true };
 }

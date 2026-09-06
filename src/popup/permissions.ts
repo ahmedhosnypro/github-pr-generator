@@ -9,9 +9,11 @@
  * never the debounced validators.
  */
 
+import { parseUrlOrNull } from "./messaging";
+
 /** "https://api.example.com/*" pattern for chrome.permissions, or null if invalid. */
 function endpointOriginPattern(endpoint: string): string | null {
-  const url = URL.parse(endpoint.trim());
+  const url = parseUrlOrNull(endpoint.trim());
   if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) return null;
   return url.origin + "/*";
 }

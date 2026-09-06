@@ -10,10 +10,22 @@ export interface GenerateResponse {
 
 export interface GenerateTitleResponse {
   title: string;
+  /** Always false since the review gate: generation never PATCHes the PR anymore. */
   updated: boolean;
 }
 
 export interface GenerateDescriptionResponse {
+  body: string;
+  /** Always false since the review gate: generation never PATCHes the PR anymore. */
+  updated: boolean;
+}
+
+export interface ApplyTitleResponse {
+  title: string;
+  updated: boolean;
+}
+
+export interface ApplyDescriptionResponse {
   body: string;
   updated: boolean;
 }

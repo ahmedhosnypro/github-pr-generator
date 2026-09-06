@@ -1,18 +1,41 @@
 import type { GenerateResponse } from "../responses";
 import { BTN_DESC_ID, BTN_ID } from "./constants";
-import { clearButtonLoading, getButton, setButtonLoading, setReactValue, showToast } from "./dom";
+import {
+  clearButtonLoading,
+  createStreamingFill,
+  getButton,
+  type StreamingFieldFill,
+  setButtonLoading,
+  setReactValue,
+  showToast,
+} from "./dom";
 import { errorMessage, errorStack } from "./errors";
 import { extractCommits, extractLinkedIssues, extractStats } from "./extract-commits";
 import { extractBranchContext, extractFileChanges } from "./extract-context";
 import { log } from "./log";
 import { splitStreamedCombined, streamFromBackground } from "./stream";
 
-/** Lightweight per-chunk fill during streaming; the final fillPRFields call re-commits with full React side effects. */
-function fillPRFieldsStreaming(title: string, description: string): void {
-  const titleInput = document.querySelector<HTMLInputElement>('input[name="pull_request[title]"]');
-  const bodyTextarea = document.querySelector<HTMLTextAreaElement>("textarea#pull_request_body");
-  if (titleInput && title) setReactValue(titleInput, title);
-  if (bodyTextarea && description) setReactValue(bodyTextarea, description);
+/** Per-token fill during streaming: batched via createStreamingFill so each chunk updates the value but events fire at most once per batch window. */
+interface StreamingFills {
+  title: StreamingFieldFill | null;
+  desc: StreamingFieldFill | null;
+}
+
+function fillPRFieldsStreaming(fills: StreamingFills, title: string, description: string): void {
+  if (title) {
+    if (!fills.title) {
+      const el = document.querySelector<HTMLInputElement>('input[name="pull_request[title]"]');
+      if (el) fills.title = createStreamingFill(el);
+    }
+    fills.title?.update(title);
+  }
+  if (description) {
+    if (!fills.desc) {
+      const el = document.querySelector<HTMLTextAreaElement>("textarea#pull_request_body");
+      if (el) fills.desc = createStreamingFill(el);
+    }
+    fills.desc?.update(description);
+  }
 }
 
 function extractExistingBody(): string {
@@ -93,6 +116,7 @@ async function runGenerate(): Promise<void> {
 
   log("info", "Streaming generate request over background port...");
   let accumulated = "";
+  const fills: StreamingFills = { title: null, desc: null };
   const result = await streamFromBackground<GenerateResponse>(
     {
       type: "generate",
@@ -108,11 +132,14 @@ async function runGenerate(): Promise<void> {
     (delta) => {
       accumulated += delta;
       const partial = splitStreamedCombined(accumulated);
-      fillPRFieldsStreaming(partial.title, partial.description);
+      fillPRFieldsStreaming(fills, partial.title, partial.description);
     },
   );
   log("info", "Stream completed");
 
+  // Commit the final batch of events before the authoritative fill below.
+  fills.title?.finish();
+  fills.desc?.finish();
   fillPRFields(result.title, result.description);
   log("info", "PR fields filled successfully - title: " + result.title);
   showToast("PR title and description generated!");

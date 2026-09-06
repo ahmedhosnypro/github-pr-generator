@@ -609,6 +609,26 @@ main {
   display: block;
 }
 
+/* Plain-HTTP endpoint warning: prominent and persistent, not tied to a
+   validation attempt (that would need a network call). */
+.field-warning {
+  display: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background-color: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  font-family: var(--md-sys-typescale-body-small-font);
+  font-size: var(--md-sys-typescale-body-small-size);
+  font-weight: var(--md-sys-typescale-body-small-weight);
+  line-height: var(--md-sys-typescale-body-small-line-height);
+  letter-spacing: var(--md-sys-typescale-body-small-tracking);
+  margin-top: 4px;
+}
+
+.field-warning.visible {
+  display: block;
+}
+
 .md-switch {
   display: inline-flex;
   align-items: center;

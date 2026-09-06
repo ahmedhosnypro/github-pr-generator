@@ -1,7 +1,15 @@
 import type { GitHubDiffResult, GitHubErrorResult } from "../../github-types";
 import type { BranchContext, ExtensionConfig } from "../../types";
 import { errorMessage, logMsg } from "../log";
-import { GITHUB_DIFF_ACCEPT, GITHUB_USER_AGENT, isValidPrNumber, isValidRepoName, rateLimitRemaining } from "./common";
+import {
+  fetchWithTimeout,
+  GITHUB_DIFF_ACCEPT,
+  GITHUB_USER_AGENT,
+  isValidPrNumber,
+  isValidRepoName,
+  rateLimitOrForbidden,
+  rateLimitRemaining,
+} from "./common";
 import { parseHunkLineRanges, truncateDiff } from "./diff-parse";
 
 async function diffFailure(response: Response): Promise<GitHubErrorResult | null> {
@@ -10,12 +18,8 @@ async function diffFailure(response: Response): Promise<GitHubErrorResult | null
     return { error: "GITHUB_404" };
   }
 
-  if (response.status === 403 || response.status === 429) {
-    const remaining = rateLimitRemaining(response);
-    const reset = response.headers.get("X-RateLimit-Reset") || "unknown";
-    logMsg("GitHub API rate limited - remaining: " + remaining + ", reset: " + reset);
-    return { error: "GITHUB_RATE_LIMITED", rateLimitRemaining: remaining };
-  }
+  const blocked = rateLimitOrForbidden(response);
+  if (blocked) return blocked;
 
   if (!response.ok) {
     const errText = await response.text();
@@ -80,7 +84,7 @@ async function requestCompareDiff(
   const headers = buildDiffHeaders(config);
 
   try {
-    const response = await fetch(url, { method: "GET", headers });
+    const response = await fetchWithTimeout(url, { method: "GET", headers });
     logMsg(
       "GitHub API diff response status: " +
         String(response.status) +
@@ -107,7 +111,7 @@ async function requestPrDiff(
   const url = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
   logMsg("Fetching fallback diff from: " + url);
   try {
-    const response = await fetch(url, { method: "GET", headers: buildDiffHeaders(config) });
+    const response = await fetchWithTimeout(url, { method: "GET", headers: buildDiffHeaders(config) });
     return await processDiffResponse(config, response);
   } catch (fetchErr) {
     logMsg("GitHub API fetch error (pull diff): " + errorMessage(fetchErr));

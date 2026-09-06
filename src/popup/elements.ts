@@ -28,6 +28,7 @@ export const testGitHubBtn = byId("testGitHubBtn") as HTMLButtonElement;
 export const testGitHubResult = byId("testGitHubResult");
 export const lastSavedEl = byId("lastSaved");
 export const apiEndpointError = byId("apiEndpointError");
+export const insecureEndpointWarning = byId("apiEndpointInsecureWarning");
 
 const statusText = connectionStatus.querySelector<HTMLElement>(".status-indicator__text");
 if (!statusText) throw new Error("[PR Generator popup] missing .status-indicator__text");

@@ -7,7 +7,13 @@ import type {
 } from "../../github-types";
 import type { CommitInfo, ExtensionConfig, FileChange, FileChangeType } from "../../types";
 import { errorMessage, logMsg } from "../log";
-import { isValidPrNumber, makeGitHubHeaders, rateLimitRemaining } from "./common";
+import {
+  fetchWithTimeout,
+  isValidPrNumber,
+  makeGitHubHeaders,
+  rateLimitOrForbidden,
+  rateLimitRemaining,
+} from "./common";
 
 interface PageListResult<T> {
   items: T[];
@@ -23,7 +29,7 @@ async function fetchPage(
   const url = baseUrl + "?page=" + String(page) + "&per_page=" + String(perPage);
   logMsg("Fetching " + label + " page " + String(page) + " from: " + url);
 
-  const response = await fetch(url, { method: "GET", headers });
+  const response = await fetchWithTimeout(url, { method: "GET", headers });
   logMsg(
     label +
       " page " +
@@ -34,6 +40,8 @@ async function fetchPage(
       rateLimitRemaining(response),
   );
   if (!response.ok) {
+    const blocked = rateLimitOrForbidden(response);
+    if (blocked) return blocked;
     const errText = await response.text();
     logMsg(
       "GitHub API error fetching " +

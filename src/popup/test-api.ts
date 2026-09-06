@@ -1,7 +1,12 @@
 import { apiKeyInput, endpointInput, modelInput, testApiBtn, testApiResult } from "./elements";
-import { errorMessage } from "./messaging";
+import { errorMessage, isTimeoutError } from "./messaging";
 import { stripTrailingSlashes } from "./text";
 import { COLOR_ERROR, COLOR_MUTED, COLOR_OK } from "./ui";
+
+const TEST_API_TIMEOUT_MS = 20_000;
+
+// Result text changes must be announced; popup.html has no live regions.
+testApiResult.setAttribute("aria-live", "polite");
 
 interface ChatChunk {
   choices?: {
@@ -42,7 +47,7 @@ function aggregateSse(text: string): string {
 
 function parseApiResponse(resp: Response, contentType: string, text: string): ApiTestResult {
   if (contentType.includes("event-stream") || /^data:\s/m.test(text)) {
-    return { ok: resp.ok, body: aggregateSse(text) || "(stream response)" };
+    return { ok: resp.ok, status: resp.status, body: aggregateSse(text) || "(stream response)" };
   }
   if (resp.ok) {
     try {
@@ -79,7 +84,9 @@ function showApiResult(result: ApiTestResult): void {
 function showApiError(err: unknown): void {
   testApiBtn.disabled = false;
   testApiBtn.textContent = "Test API";
-  testApiResult.textContent = "Error: " + errorMessage(err);
+  testApiResult.textContent = isTimeoutError(err)
+    ? "Timed out after " + String(TEST_API_TIMEOUT_MS / 1000) + "s — no response from the endpoint"
+    : "Error: " + errorMessage(err);
   testApiResult.style.color = COLOR_ERROR;
 }
 
@@ -110,6 +117,7 @@ export function testApi(): void {
       temperature: 0,
       stream: false,
     }),
+    signal: AbortSignal.timeout(TEST_API_TIMEOUT_MS),
   })
     .then(readApiResponse)
     .then(showApiResult)

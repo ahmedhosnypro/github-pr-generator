@@ -15,9 +15,13 @@ function getFileHunks(hunksByFile: GitHubHunksByFile, file: string): GitHubHunkR
 const DIFF_HEADER_RE = /^diff --git (?:a\/(.+?)|"a\/((?:[^"\\]|\\.)*)") (?:b\/(.+)|"b\/((?:[^"\\]|\\.)*)")$/;
 const PLUS_HEADER_RE = /^\+\+\+ (?:b\/(.+)|"b\/((?:[^"\\]|\\.)*)")$/;
 
-// Decode the inside of a C-quoted path token: \" and \\ escapes plus \ooo
-// octal byte escapes, with the resulting bytes read as UTF-8 (git emits
-// non-ASCII names as octal escapes by default).
+// Git's named C escapes inside a quoted path. Anything not listed here (and
+// not an octal escape) keeps its literal character.
+const NAMED_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+
+// Decode the inside of a C-quoted path token: named escapes (\t, \n, \"...)
+// plus \ooo octal byte escapes, with the resulting bytes read as UTF-8 (git
+// emits non-ASCII names as octal escapes by default).
 function unquoteGitPath(quoted: string): string {
   const bytes: number[] = [];
   const encoder = new TextEncoder();
@@ -45,7 +49,7 @@ function unquoteGitPath(quoted: string): string {
       bytes.push(Number.parseInt(octal, 8));
       advance = digitPos - pos;
     } else if (next !== "") {
-      bytes.push(encoder.encode(next)[0] ?? next.charCodeAt(0));
+      bytes.push(NAMED_ESCAPES[next] ?? encoder.encode(next)[0] ?? next.charCodeAt(0));
     }
     pos += advance;
   }
@@ -65,7 +69,10 @@ function parseHunkHeader(line: string, currentFile: string | null, hunksByFile: 
   if (hunkMatch && currentFile) {
     const rightStart = Number.parseInt(hunkMatch[3] ?? "0", 10);
     const rightCount = hunkMatch[4] ? Number.parseInt(hunkMatch[4], 10) : 1;
-    getFileHunks(hunksByFile, currentFile).push({ rightStart, rightCount });
+    // Zero-count right side = pure deletion, whose start is pegged at the
+    // line preceding the deletion. Anchor that single line so the emitted
+    // range never inverts (start..start-1).
+    getFileHunks(hunksByFile, currentFile).push({ rightStart, rightCount: Math.max(rightCount, 1) });
   }
 }
 

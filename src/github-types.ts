@@ -1,8 +1,21 @@
 import type { CommitInfo, FileChange } from "./types";
 
+/** Error codes returned by the GitHub API helpers; consumed by string-literal
+ * comparisons in background handlers (e.g. generate.ts) and the popup. */
+type GitHubErrorCode =
+  | "GITHUB_404"
+  | "GITHUB_403"
+  | "GITHUB_422"
+  | "GITHUB_RATE_LIMITED"
+  | "GITHUB_FORBIDDEN"
+  | "GITHUB_API_ERROR"
+  | "GITHUB_NETWORK_ERROR"
+  | "GITHUB_INVALID_CONTEXT"
+  | "GITHUB_NO_TOKEN";
+
 /** Error shape returned (not thrown) by the GitHub API helpers. */
 export interface GitHubErrorResult {
-  error: string;
+  error: GitHubErrorCode;
   status?: number;
   message?: string;
   rateLimitRemaining?: string;

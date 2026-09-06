@@ -75,3 +75,26 @@ export function ensureArtifactEnding(description: string, stats: PRStats | null)
     `\n\nScope: ${String(stats.files)} files, +${String(stats.additions)}/-${String(stats.deletions)}.\n`
   );
 }
+
+const squish = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/**
+ * Preservation guard for preserve-authored refinement: returns the authored
+ * paragraphs (blank-line-separated blocks) from `before` that no longer
+ * survive — verbatim, up to whitespace re-flow — in `after`. Matching is done
+ * on whitespace-collapsed text because the model is explicitly allowed to
+ * re-wrap prose lines longer than 400 chars; anything stronger would reject
+ * the one legal edit, anything weaker (word-bag) would miss reorderings.
+ */
+export function missingAuthoredText(before: string, after: string): string[] {
+  const haystack = " " + squish(after) + " ";
+  const missing: string[] = [];
+  for (const block of before.split(/\n\s*\n/)) {
+    const needle = squish(block);
+    if (needle === "") continue;
+    if (!haystack.includes(" " + needle + " ")) {
+      missing.push(block);
+    }
+  }
+  return missing;
+}

@@ -5,7 +5,7 @@ export function getButton(id: string): HTMLButtonElement | null {
   return el instanceof HTMLButtonElement ? el : null;
 }
 
-export function setReactValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+function assignElementValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
   const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
 
@@ -16,9 +16,52 @@ export function setReactValue(element: HTMLInputElement | HTMLTextAreaElement, v
   } else {
     element.value = value;
   }
+}
 
+function dispatchInputChange(element: HTMLInputElement | HTMLTextAreaElement): void {
   element.dispatchEvent(new Event("input", { bubbles: true }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+export function setReactValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  assignElementValue(element, value);
+  dispatchInputChange(element);
+}
+
+// Streaming fill writes the latest value on every token but dispatches the
+// synthetic input+change pair at most once per batch window — hundreds of
+// events per generation would otherwise keep the page's change handlers busy
+// for the whole stream. finish() guarantees a final input+change so the last
+// value is always committed, even mid-window.
+const STREAM_EVENT_BATCH_MS = 50;
+
+export interface StreamingFieldFill {
+  update: (value: string) => void;
+  finish: () => void;
+}
+
+export function createStreamingFill(element: HTMLInputElement | HTMLTextAreaElement): StreamingFieldFill {
+  let dirty = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!dirty) return;
+    dirty = false;
+    dispatchInputChange(element);
+  };
+  return {
+    update(value: string): void {
+      assignElementValue(element, value);
+      dirty = true;
+      if (timer === null) {
+        timer = setTimeout(flush, STREAM_EVENT_BATCH_MS);
+      }
+    },
+    finish: flush,
+  };
 }
 
 export function createButton(id: string, label: string, onClick: () => void): HTMLButtonElement {
@@ -84,4 +127,121 @@ export function clearButtonLoading(btn: HTMLButtonElement): void {
   btn.disabled = false;
   btn.innerHTML = btn.dataset.originalHtml ?? btn.innerHTML;
   btn.classList.remove("ai-generate-btn--loading");
+}
+
+/** Controls handed to the review modal's onApply callback. */
+export interface ReviewControls {
+  /** Disable/enable the form while the apply request is in flight. */
+  setBusy: (busy: boolean) => void;
+  /** Dismiss the modal (also removes its Escape/click-away listeners). */
+  close: () => void;
+}
+
+export interface ReviewModalOptions {
+  /** Header text, e.g. "Review proposed PR title". */
+  heading: string;
+  /** Proposed text the user can edit before applying. */
+  value: string;
+  /** true → textarea (description), false/absent → single-line input (title). */
+  multiline?: boolean;
+  /** Called with the edited text; apply failures must call controls.setBusy(false). */
+  onApply: (value: string, controls: ReviewControls) => void;
+  /** Called when the user cancels (Cancel button, Escape, or click-away). */
+  onCancel?: () => void;
+}
+
+const REVIEW_MODAL_ID = "ai-pr-review-modal";
+
+/**
+ * On-page review panel for LLM proposals before they are written to the PR.
+ * Everything is built with createElement/textContent so proposal text is never
+ * interpreted as HTML.
+ */
+export function showReviewModal(options: ReviewModalOptions): void {
+  document.getElementById(REVIEW_MODAL_ID)?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = REVIEW_MODAL_ID;
+  overlay.className = "ai-review-overlay";
+
+  const panel = document.createElement("div");
+  panel.className = "ai-review-modal";
+  overlay.appendChild(panel);
+
+  const header = document.createElement("div");
+  header.className = "ai-review-modal__header";
+  header.textContent = options.heading;
+  panel.appendChild(header);
+
+  const hint = document.createElement("div");
+  hint.className = "ai-review-modal__hint";
+  hint.textContent = "Review and edit the AI proposal below. Nothing changes on the PR until you click Apply.";
+  panel.appendChild(hint);
+
+  const field: HTMLInputElement | HTMLTextAreaElement = options.multiline
+    ? document.createElement("textarea")
+    : document.createElement("input");
+  if (field instanceof HTMLInputElement) field.type = "text";
+  field.className = "ai-review-modal__field";
+  field.value = options.value;
+  if (field instanceof HTMLTextAreaElement) field.rows = 14;
+  panel.appendChild(field);
+
+  const actions = document.createElement("div");
+  actions.className = "ai-review-modal__actions";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "ai-review-modal__btn ai-review-modal__btn--cancel";
+  cancelBtn.textContent = "Cancel";
+
+  const applyBtn = document.createElement("button");
+  applyBtn.type = "button";
+  applyBtn.className = "ai-review-modal__btn ai-review-modal__btn--apply";
+  applyBtn.textContent = "Apply to PR";
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(applyBtn);
+  panel.appendChild(actions);
+
+  let closed = false;
+  const cancel = (): void => {
+    close();
+    options.onCancel?.();
+  };
+  const onKeydown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      cancel();
+    }
+  };
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener("keydown", onKeydown, true);
+    overlay.remove();
+  };
+  const setBusy = (busy: boolean): void => {
+    applyBtn.disabled = busy;
+    cancelBtn.disabled = busy;
+    field.disabled = busy;
+  };
+
+  cancelBtn.addEventListener("click", cancel);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) cancel();
+  });
+  applyBtn.addEventListener("click", () => {
+    const value = field.value.trim();
+    if (!value) {
+      showToast("The proposed text cannot be empty.", true);
+      return;
+    }
+    setBusy(true);
+    options.onApply(value, { setBusy, close });
+  });
+  document.addEventListener("keydown", onKeydown, true);
+
+  document.body.appendChild(overlay);
+  field.focus();
 }

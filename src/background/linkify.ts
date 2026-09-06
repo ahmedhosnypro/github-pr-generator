@@ -6,8 +6,10 @@
  * Targets:
  * - opened PR:  /owner/repo/pull/<N>/files#diff-<hash>R<s>-R<end>
  * - creation:   /owner/repo/compare/<base>...<head>#diff-<hash>R<s>-R<end>
- * Hashless markers (diffhunk://L5-R25, no anchor list entry) degrade to plain
- * `N` text — visible, but no dead href.
+ * The hash may arrive as `#diff-HASH`, `diff-HASH` (old Anchors-section
+ * spelling), or a bare hash — all resolve. Hashless markers
+ * (diffhunk://L5-R25, no anchor list entry) and any marker that fails to
+ * parse degrade to plain `N` text — visible, but no dead href.
  */
 
 interface DiffLinkTarget {
@@ -29,8 +31,14 @@ function diffBaseUrl(target: DiffLinkTarget): string {
   return prefix + "/compare/" + base + "..." + head;
 }
 
-// [[N]](diffhunk://[#]diff-HASH_Ls-Re) or hashless [[N]](diffhunk://Ls-Re)
-const DIFFHUNK_LINK = /\[\[(\d+)\]\]\(diffhunk:\/\/(#?diff-[a-zA-Z0-9_-]+)?_?L(\d+)-R(\d+)\)/g;
+// [[N]](diffhunk://[#]diff-HASH_Ls-Re) — # and diff- optional so the bare-hash
+// form (diffhunk://HASH_Ls-Re) resolves too — or hashless [[N]](diffhunk://Ls-Re)
+const DIFFHUNK_LINK = /\[\[(\d+)\]\]\(diffhunk:\/\/(#?(?:diff-)?[a-zA-Z0-9_-]+)?_?L(\d+)-R(\d+)\)/g;
+
+// A diffhunk marker that survives the pass above is unparseable; degrade it to
+// the plain reference number (same as the hashless form) instead of leaving
+// raw dead-text markup in the PR body.
+const UNRESOLVED_DIFFHUNK = /\[\[(\d+)\]\]\(diffhunk:\/\/[^)]*\)/g;
 
 // Bare [[N]] refs with no URL — rendered as ordinary text on GitHub, but the
 // numbering is meaningless without a link target.
@@ -44,11 +52,12 @@ export function resolveDiffLinks(body: string, target: DiffLinkTarget): string {
       if (!anchor) return num;
       // The hash char class includes '-', so `#diff-abc…_L10` ends up with the
       // trailing separator absorbed into the hash; strip it for a clean URL.
-      const hash = anchor.replace(/^#/, "").replace(/_+$/, "");
+      // The regex also accepts a bare hash, so re-attach the diff- prefix.
+      let hash = anchor.replace(/^#/, "").replace(/_+$/, "");
+      if (!hash.startsWith("diff-")) hash = "diff-" + hash;
       const lines = start && end ? "R" + start + "-R" + end : "";
       return "[" + num + "](" + base + "#" + hash + lines + ")";
     },
   );
-  // Model sometimes emits [[N]] without a (diffhunk://...) link; strip those.
-  return linked.replace(BARE_REF, "");
+  return linked.replace(UNRESOLVED_DIFFHUNK, "$1").replace(BARE_REF, "");
 }

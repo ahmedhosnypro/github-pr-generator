@@ -284,3 +284,109 @@
   border-radius: 4px;
   z-index: 1;
 }
+
+/* Review gate: editable proposal shown before anything is written to the PR. */
+.ai-review-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(1, 4, 9, 0.65);
+}
+
+.ai-review-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 92vw);
+  max-height: 82vh;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  overflow: hidden;
+}
+
+.ai-review-modal__header {
+  padding: 10px 14px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  color: #c9d1d9;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-review-modal__hint {
+  padding: 8px 12px 0;
+  color: #8b949e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-review-modal__field {
+  margin: 8px 12px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #c9d1d9;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.ai-review-modal__field:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.25);
+}
+
+.ai-review-modal__field:disabled {
+  opacity: 0.6;
+}
+
+.ai-review-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid #30363d;
+  background: #161b22;
+}
+
+.ai-review-modal__btn {
+  padding: 5px 14px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ai-review-modal__btn--cancel {
+  color: #c9d1d9;
+  background: #21262d;
+  border: 1px solid #30363d;
+}
+
+.ai-review-modal__btn--cancel:hover:not(:disabled) {
+  background: #30363d;
+}
+
+.ai-review-modal__btn--apply {
+  color: #ffffff;
+  background: #238636;
+  border: 1px solid rgba(240, 246, 252, 0.1);
+}
+
+.ai-review-modal__btn--apply:hover:not(:disabled) {
+  background: #2ea043;
+}
+
+.ai-review-modal__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

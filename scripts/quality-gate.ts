@@ -25,6 +25,7 @@ const COMMANDS: Record<Stage, Array<{ command: string; args: string[] }>> = {
     { command: "bun", args: ["run", "oxlint"] },
     { command: "bun", args: ["run", "biome:check"] },
     { command: "bun", args: ["run", "eslint"] },
+    { command: "bun", args: ["run", "scripts/check-version-sync.ts"] },
   ],
   TESTS: [{ command: "bun", args: ["run", "test"] }],
   UNUSED: [{ command: "bun", args: ["run", "check:unused"] }],

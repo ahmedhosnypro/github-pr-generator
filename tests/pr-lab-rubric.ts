@@ -1,7 +1,7 @@
 // Deterministic 10-point render-quality rubric for generated PR descriptions.
 // Each check maps to one failure class observed in the corpus study
 // (analysis/pull-requests/PRESENTATION.md) or the sirajLMS/siraj#119 incident.
-import { countCoveredCommits, coverageThreshold } from "../src/background/commit-coverage";
+import { countCoveredCommits, coverageThreshold, listedCommits } from "../src/background/commit-coverage";
 import { countDiffAnchors } from "../src/background/parse";
 
 export interface RubricCheck {
@@ -185,14 +185,16 @@ function checkEnding(description: string): RubricCheck {
   return { name: "ends on an artifact", ok: endingCheck(description).ok, detail: endingCheck(description).detail };
 }
 
+// Mirrors the extension scorer (refinement-checks.ts): only the commits the
+// prompt actually lists count toward coverage — beyond the cap the extra
+// commits are thematically covered, not named.
 function checkCoverage(description: string, commitMessages: string[]): RubricCheck {
-  const threshold = coverageThreshold(commitMessages.length);
+  const listed = listedCommits(commitMessages);
+  const threshold = coverageThreshold(listed.length);
   return {
     name: "commit coverage ≥" + String(Math.round(threshold * 100)) + "%",
-    ok:
-      commitMessages.length === 0 ||
-      countCoveredCommits(commitMessages, description) / commitMessages.length >= threshold,
-    detail: String(countCoveredCommits(commitMessages, description)) + "/" + String(commitMessages.length),
+    ok: listed.length === 0 || countCoveredCommits(listed, description) / listed.length >= threshold,
+    detail: String(countCoveredCommits(listed, description)) + "/" + String(listed.length),
   };
 }
 

@@ -5,6 +5,7 @@
 // so both globals must be stubbed BEFORE the import, and each scenario
 // gets a fresh module instance via a query-param cache-bust (FILE_CONFIG
 // is module-level state).
+import { resolveConfig } from "../src/config-resolve";
 import type { ExtensionConfig, FileConfig, StoredConfig } from "../src/types";
 import { expectMatch, getFailures } from "./expect-helpers";
 
@@ -109,12 +110,12 @@ console.log("=== Config Resolve Tests ===\n");
 // --- File config beats stored for diffMaxLines/diffMaxBytes.
 {
   const getConfig = await loadGetConfig({
-    fileConfig: { diffMaxLines: 100, diffMaxBytes: 200 },
+    fileConfig: { diffMaxLines: 100, diffMaxBytes: 15000 },
     stored: { diffMaxLines: 700, diffMaxBytes: 42000 },
   });
   const cfg = await getConfig();
   expectMatch("file diffMaxLines beats stored", cfg.diffMaxLines, 100);
-  expectMatch("file diffMaxBytes beats stored", cfg.diffMaxBytes, 200);
+  expectMatch("file diffMaxBytes beats stored", cfg.diffMaxBytes, 15000);
 }
 
 // --- NaN-producing stored values ('' and '   ') fall back to defaults,
@@ -190,6 +191,70 @@ console.log("=== Config Resolve Tests ===\n");
 {
   const getConfig = await loadGetConfig({ fileConfig: { thinkingEffort: "low" }, stored: { thinkingEffort: "high" } });
   expectMatch("file thinkingEffort beats stored", (await getConfig()).thinkingEffort, "low");
+}
+
+// --- Popup/background agreement: the popup resolves display values through
+// --- the SAME shared resolver, so file diff settings must surface even when
+// --- nothing is stored (regression: the popup prefilled defaults via
+// --- applyDefaults, shadowing config.local.json entirely).
+{
+  const display = resolveConfig({}, { diffEnabled: false, diffMaxLines: 100, diffMaxBytes: 200 });
+  expectMatch("file diffEnabled=false displays with empty storage", display.diffEnabled, false);
+  expectMatch("file diffMaxLines displays with empty storage", display.diffMaxLines, 100);
+  expectMatch("file diffMaxBytes displays with empty storage", display.diffMaxBytes, 200);
+}
+{
+  const display = resolveConfig({ diffEnabled: true, diffMaxLines: 700 }, { diffEnabled: false, diffMaxLines: 100 });
+  expectMatch("file diffEnabled=false displays over stored true", display.diffEnabled, false);
+  expectMatch("file diffMaxLines displays over stored", display.diffMaxLines, 100);
+}
+
+// --- Numeric limits are clamped to [min, max] in background config
+// --- resolution: negative/zero limits used to silently empty every diff.
+{
+  const getConfig = await loadGetConfig({
+    fileConfig: null,
+    stored: { diffMaxLines: -5, diffMaxBytes: -1 },
+  });
+  const cfg = await getConfig();
+  expectMatch("negative diffMaxLines clamps to min 100", cfg.diffMaxLines, 100);
+  expectMatch("negative diffMaxBytes clamps to min 10000", cfg.diffMaxBytes, 10000);
+}
+{
+  const getConfig = await loadGetConfig({
+    fileConfig: null,
+    stored: { diffMaxLines: 0, diffMaxBytes: 0 },
+  });
+  const cfg = await getConfig();
+  expectMatch("zero diffMaxLines clamps to min", cfg.diffMaxLines, 100);
+  expectMatch("zero diffMaxBytes clamps to min", cfg.diffMaxBytes, 10000);
+}
+{
+  const getConfig = await loadGetConfig({
+    fileConfig: null,
+    stored: { diffMaxLines: 999999, diffMaxBytes: 99999999 },
+  });
+  const cfg = await getConfig();
+  expectMatch("huge diffMaxLines clamps to max 10000", cfg.diffMaxLines, 10000);
+  expectMatch("huge diffMaxBytes clamps to max 500000", cfg.diffMaxBytes, 500000);
+}
+{
+  const getConfig = await loadGetConfig({
+    fileConfig: { diffMaxLines: -50, diffMaxBytes: 9e9 },
+    stored: {},
+  });
+  const cfg = await getConfig();
+  expectMatch("file negative diffMaxLines clamps", cfg.diffMaxLines, 100);
+  expectMatch("file huge diffMaxBytes clamps", cfg.diffMaxBytes, 500000);
+}
+{
+  const getConfig = await loadGetConfig({
+    fileConfig: null,
+    stored: { diffMaxLines: 1234.9, diffMaxBytes: 42000.7 },
+  });
+  const cfg = await getConfig();
+  expectMatch("fractional diffMaxLines truncates", cfg.diffMaxLines, 1234);
+  expectMatch("fractional diffMaxBytes truncates", cfg.diffMaxBytes, 42000);
 }
 
 const failures = getFailures();

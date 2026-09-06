@@ -8,11 +8,15 @@ import type {
 import type { ExtensionConfig } from "../../types";
 import { errorMessage, logMsg } from "../log";
 import {
+  fetchWithTimeout,
   GITHUB_JSON_ACCEPT,
   GITHUB_USER_AGENT,
+  isRateLimited,
   isValidPrNumber,
   isValidRepoName,
   makeGitHubHeaders,
+  rateLimitedResult,
+  rateLimitOrForbidden,
   rateLimitRemaining,
 } from "./common";
 
@@ -66,7 +70,7 @@ export async function fetchPRDetails(
   logMsg("Fetching PR details from: " + url);
 
   try {
-    const response = await fetch(url, { method: "GET", headers: makeGitHubHeaders(config) });
+    const response = await fetchWithTimeout(url, { method: "GET", headers: makeGitHubHeaders(config) });
     logMsg(
       "PR details response status: " +
         String(response.status) +
@@ -74,6 +78,8 @@ export async function fetchPRDetails(
         rateLimitRemaining(response),
     );
     if (!response.ok) {
+      const blocked = rateLimitOrForbidden(response);
+      if (blocked) return blocked;
       const errText = await response.text();
       logMsg("GitHub API error fetching PR details: " + String(response.status) + " - " + errText.substring(0, 200));
       return { error: "GITHUB_API_ERROR", status: response.status };
@@ -89,6 +95,9 @@ export async function fetchPRDetails(
 async function updateFailure(response: Response): Promise<UpdatePRResult> {
   const errText = await response.text();
   logMsg("GitHub API error updating PR: " + String(response.status) + " - " + errText.substring(0, 200));
+  // Real rate limiting first; a non-exhausted 403 keeps the update-specific
+  // GITHUB_403 code below (its message already names the PAT-scope cause).
+  if (isRateLimited(response)) return rateLimitedResult(response);
   if (response.status === 403) {
     return { error: "GITHUB_403", message: "GitHub PAT may lack repo scope or insufficient permissions." };
   }
@@ -131,7 +140,7 @@ export async function updatePRField(
   };
 
   try {
-    const response = await fetch(url, { method: "PATCH", headers, body: JSON.stringify(fields) });
+    const response = await fetchWithTimeout(url, { method: "PATCH", headers, body: JSON.stringify(fields) });
     logMsg(
       "PR update response status: " +
         String(response.status) +

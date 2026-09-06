@@ -1,23 +1,11 @@
 {
   "apiEndpoint": "http://localhost:20128/v1",
   "apiKey": "sk-YOUR-API-KEY-HERE",
-  "diffEnabled": true,
-  "diffMaxBytes": 100000,
-  "diffMaxLines": 3000,
   "githubToken": "",
   "model": "model_id",
-  "thinkingEffort": "default",
   "testPr": {
     "owner": "facebook",
     "repo": "react",
-    "number": 37382,
-    "headRefName": "sebbie/jest-30",
-    "baseRefName": "main",
-    "title": "[test] Bump Jest to 30.4",
-    "description": "Public repo test PR (read-only via gh)",
-    "commits": 3,
-    "filesChanged": 61,
-    "additions": 1669,
-    "deletions": 1281
+    "number": 37382
   }
 }

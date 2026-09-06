@@ -6,6 +6,7 @@ import {
   buildScreenshotsHint,
   buildSizeTierNote,
   buildTemplateFillBlock,
+  enforcePromptBudget,
   FORMATTING_RULES,
   INTENT_TITLES_RULE,
   NO_BOT_SIGNATURES_RULE,
@@ -13,6 +14,7 @@ import {
   SCOPE_BOUNDARIES_RULE,
   SECTIONS_PROMPT,
   TITLE_STYLE_GUIDANCE,
+  wrapUntrustedData,
 } from "./common";
 
 export function buildTitleOnlyPrompt(
@@ -21,8 +23,21 @@ export function buildTitleOnlyPrompt(
   style?: RepoStyle,
   freshVariant?: string,
 ): string {
+  return enforcePromptBudget(
+    (summary) => assembleTitleOnlyPrompt(summary, existingTitle, style, freshVariant),
+    changesSummary,
+  );
+}
+
+function assembleTitleOnlyPrompt(
+  changesSummary: string,
+  existingTitle: string,
+  style?: RepoStyle,
+  freshVariant?: string,
+): string {
   let prompt =
     "Generate ONLY a GitHub pull request title for the following changes. Do NOT generate a description.\n\n";
+  // changesSummary is already fenced as <untrusted_pr_data> by buildChangesSummary.
   prompt += changesSummary + "\n";
 
   if (freshVariant) {
@@ -31,7 +46,10 @@ export function buildTitleOnlyPrompt(
       freshVariant +
       ".\n\n";
   } else if (existingTitle && existingTitle.trim().length > 0) {
-    prompt += '## Existing Title\nThe current title is: "' + existingTitle + '"\nGenerate an improved version.\n\n';
+    prompt +=
+      "## Existing Title (untrusted data)\n" +
+      wrapUntrustedData('The current title is: "' + existingTitle + '"') +
+      "Generate an improved version.\n\n";
   }
 
   if (style) {
@@ -57,12 +75,27 @@ export function buildDescriptionOnlyPrompt(
   existingDescription: string,
   style?: RepoStyle,
 ): string {
+  return enforcePromptBudget(
+    (summary, existing) => assembleDescriptionOnlyPrompt(summary, existingTitle, existing, style),
+    changesSummary,
+    existingDescription,
+  );
+}
+
+function assembleDescriptionOnlyPrompt(
+  changesSummary: string,
+  existingTitle: string,
+  existingDescription: string,
+  style?: RepoStyle,
+): string {
   let prompt =
     "Generate ONLY a GitHub pull request description for the following changes. The title is already set and should NOT be changed.\n\n";
+  // changesSummary is already fenced as <untrusted_pr_data> by buildChangesSummary.
   prompt += changesSummary + "\n";
 
   if (existingTitle && existingTitle.trim().length > 0) {
-    prompt += '## Current Title\nThe PR title is: "' + existingTitle + '"\n\n';
+    prompt +=
+      "## Current Title (untrusted data)\n" + wrapUntrustedData('The PR title is: "' + existingTitle + '"') + "\n";
   }
 
   const hasDescription = existingDescription.trim().length > 0;

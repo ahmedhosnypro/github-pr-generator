@@ -1,3 +1,4 @@
+import { extractLinkedIssues as extractLinkedIssuesCanonical } from "../linked-issues";
 import type { CommitInfo, PRStats } from "../types";
 import { errorMessage } from "./errors";
 import { log } from "./log";
@@ -104,21 +105,7 @@ export function extractStats(): PRStats | null {
 }
 
 export function extractLinkedIssues(commits: CommitInfo[]): string[] {
-  const issues: Record<string, boolean> = {};
-  const allMessages = commits.map((c) => c.message).join("\n");
-  const patterns = [
-    /(?:fixes|resolves|closes|fix|resolve|close|addresses|address|references|refs|see|related\s+to)\s+#(\d+)/gi,
-    /#([1-9]\d{2,})/g,
-  ];
-  for (const pat of patterns) {
-    for (;;) {
-      const match = pat.exec(allMessages);
-      if (match === null) break;
-      const num = match[1];
-      if (num !== undefined) issues["#" + num] = true;
-    }
-  }
-  const result = Object.keys(issues);
+  const result = extractLinkedIssuesCanonical(commits);
   log("info", "extractLinkedIssues - found: " + result.join(", "));
   return result;
 }

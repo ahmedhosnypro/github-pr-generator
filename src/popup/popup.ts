@@ -29,12 +29,7 @@ import {
   toThinkingEffort,
   updateDiffConditionalVisibility,
 } from "./ui";
-import {
-  resetEndpointFieldError,
-  showEndpointPermissionError,
-  validateEndpoint,
-  validateEndpointDebounced,
-} from "./validate";
+import { resetEndpointFieldError, showEndpointPermissionError, validateEndpoint } from "./validate";
 
 async function validateWithPermission(): Promise<void> {
   const granted = await requestEndpointPermission(endpointInput.value.trim());
@@ -108,7 +103,6 @@ function wireButtons(): void {
   });
   testGitHubBtn.addEventListener("click", testGitHub);
   themeToggle.addEventListener("click", toggleTheme);
-  endpointInput.addEventListener("blur", validateEndpointDebounced);
   endpointInput.addEventListener("input", resetEndpointFieldError);
 }
 

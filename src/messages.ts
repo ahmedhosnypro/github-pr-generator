@@ -1,4 +1,10 @@
-import type { GenerateData, OpenedPRData, SaveConfigData } from "./types";
+import type {
+  ApplyDescriptionUpdateData,
+  ApplyTitleUpdateData,
+  GenerateData,
+  OpenedPRData,
+  SaveConfigData,
+} from "./types";
 
 export interface KeepalivePingMessage {
   type: "__keepalive_ping__";
@@ -29,6 +35,16 @@ interface GenerateMergeDescriptionMessage {
   data?: OpenedPRData;
 }
 
+interface ApplyTitleUpdateMessage {
+  type: "applyTitleUpdate";
+  data?: ApplyTitleUpdateData;
+}
+
+interface ApplyDescriptionUpdateMessage {
+  type: "applyDescriptionUpdate";
+  data?: ApplyDescriptionUpdateData;
+}
+
 interface GetConfigMessage {
   type: "getConfig";
   data?: null;
@@ -54,5 +70,7 @@ export type ExtensionMessage =
   | GenerateDescriptionMessage
   | GenerateMergeTitleMessage
   | GenerateMergeDescriptionMessage
+  | ApplyTitleUpdateMessage
+  | ApplyDescriptionUpdateMessage
   | GetConfigMessage
   | SaveConfigMessage;

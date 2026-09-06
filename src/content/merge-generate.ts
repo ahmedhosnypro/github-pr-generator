@@ -1,6 +1,13 @@
 import type { GenerateMergeDescriptionResponse, GenerateMergeTitleResponse } from "../responses";
 import { BTN_MERGE_DESC_ID, BTN_MERGE_TITLE_ID } from "./constants";
-import { clearButtonLoading, getButton, setButtonLoading, setReactValue, showToast } from "./dom";
+import {
+  clearButtonLoading,
+  createStreamingFill,
+  getButton,
+  type StreamingFieldFill,
+  setButtonLoading,
+  showToast,
+} from "./dom";
 import { errorMessage, errorStack } from "./errors";
 import { extractBranchContext } from "./extract-context";
 import { log } from "./log";
@@ -51,6 +58,7 @@ async function generateMergeTitle(): Promise<void> {
   }
   log("info", "handleGenerateMergeTitle - " + JSON.stringify(ctx));
   let accumulated = "";
+  const streaming: { fill: StreamingFieldFill | null } = { fill: null };
   const response = await streamFromBackground<GenerateMergeTitleResponse>(
     {
       type: "generateMergeTitle",
@@ -66,10 +74,14 @@ async function generateMergeTitle(): Promise<void> {
     },
     (delta) => {
       accumulated += delta;
-      const input = findMergeTitleInput();
-      if (input) setReactValue(input, accumulated);
+      if (!streaming.fill) {
+        const input = findMergeTitleInput();
+        if (input) streaming.fill = createStreamingFill(input);
+      }
+      streaming.fill?.update(accumulated);
     },
   );
+  streaming.fill?.finish();
   fillMergeFields(response.title, "");
   // Toast only what actually changed — fillMergeFields skips empty values.
   if (response.title.trim().length > 0) {
@@ -113,6 +125,7 @@ async function generateMergeDescription(): Promise<void> {
   }
   log("info", "handleGenerateMergeDescription - " + JSON.stringify(ctx));
   let accumulated = "";
+  const streaming: { fill: StreamingFieldFill | null } = { fill: null };
   const response = await streamFromBackground<GenerateMergeDescriptionResponse>(
     {
       type: "generateMergeDescription",
@@ -129,10 +142,14 @@ async function generateMergeDescription(): Promise<void> {
     },
     (delta) => {
       accumulated += delta;
-      const textarea = findMergeDescTextarea();
-      if (textarea) setReactValue(textarea, accumulated);
+      if (!streaming.fill) {
+        const textarea = findMergeDescTextarea();
+        if (textarea) streaming.fill = createStreamingFill(textarea);
+      }
+      streaming.fill?.update(accumulated);
     },
   );
+  streaming.fill?.finish();
   fillMergeFields("", response.description);
   if (response.description.trim().length > 0) {
     showToast("Merge commit description generated!");

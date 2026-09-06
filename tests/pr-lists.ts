@@ -124,12 +124,71 @@ async function testFilesSuccess(): Promise<void> {
   );
 }
 
+// (5) 429 → GITHUB_RATE_LIMITED (previously collapsed into GITHUB_API_ERROR).
+async function testCommitsRateLimited429(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(new Response("rate limited", { status: 429, headers: { "X-RateLimit-Remaining": "10" } })),
+    async () => {
+      const out = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42");
+      expectMatch("429 maps to GITHUB_RATE_LIMITED", "error" in out && out.error, "GITHUB_RATE_LIMITED");
+    },
+  );
+}
+
+// (6) 403 disambiguation: remaining 0 → GITHUB_RATE_LIMITED; remaining > 0 →
+// GITHUB_FORBIDDEN (SSO/permissions, not rate limiting).
+async function testFiles403Disambiguation(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(new Response("exhausted", { status: 403, headers: { "X-RateLimit-Remaining": "0" } })),
+    async () => {
+      const out = await fetchPRFiles(BASE_CONFIG, "octocat", "hello-world", "42");
+      expectMatch(
+        "403 with remaining 0 maps to GITHUB_RATE_LIMITED",
+        "error" in out && out.error,
+        "GITHUB_RATE_LIMITED",
+      );
+    },
+  );
+  await withFetch(
+    () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "59" } })),
+    async () => {
+      const out = await fetchPRFiles(BASE_CONFIG, "octocat", "hello-world", "42");
+      expectMatch("403 with remaining 59 maps to GITHUB_FORBIDDEN", "error" in out && out.error, "GITHUB_FORBIDDEN");
+    },
+  );
+}
+
+// (7) Timeout: fetch rejects with the DOMException AbortSignal.timeout would
+// raise → GITHUB_NETWORK_ERROR with a timeout message (not a hang).
+async function testCommitsFetchTimeout(): Promise<void> {
+  let sawSignal = false;
+  await withFetch(
+    (_url, init) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return Promise.reject(new DOMException("The operation timed out.", "TimeoutError"));
+    },
+    async () => {
+      const out = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42");
+      expectMatch("timeout maps to GITHUB_NETWORK_ERROR", "error" in out && out.error, "GITHUB_NETWORK_ERROR");
+      expectMatch(
+        "timeout message mentions it was a timeout",
+        "error" in out && typeof out.message === "string" && out.message.includes("timed out"),
+        true,
+      );
+    },
+  );
+  expectMatch("request carries an AbortSignal", sawSignal, true);
+}
+
 async function main(): Promise<void> {
   console.log("=== PR Lists Tests ===\n");
   await testCommitsInvalidPrNumber();
   await testFilesInvalidPrNumber();
   await testCommitsSuccess();
   await testFilesSuccess();
+  await testCommitsRateLimited429();
+  await testFiles403Disambiguation();
+  await testCommitsFetchTimeout();
 
   const failures = getFailures();
   if (failures > 0) {

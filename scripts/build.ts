@@ -1,9 +1,31 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { sanitizeConfig } from "./strip-config";
 
 const root = join(import.meta.dir, "..");
 const dist = join(root, "dist");
+
+// The PNGs under icons/ are committed artifacts generated from the SVGs by
+// scripts/convert-icons.ts. Regenerate only when they're missing (e.g. a
+// checkout that excluded them) so day-to-day builds don't need sharp.
+const REQUIRED_ICONS = ["icon16.png", "icon48.png", "icon128.png"];
+const missingIcons = REQUIRED_ICONS.filter((name) => !existsSync(join(root, "icons", name)));
+if (missingIcons.length > 0) {
+  console.warn(`icons/ missing ${missingIcons.join(", ")} — running scripts/convert-icons.ts to regenerate`);
+  const conversion = spawnSync(process.execPath, ["run", join(root, "scripts", "convert-icons.ts")], {
+    stdio: "inherit",
+  });
+  const stillMissing = REQUIRED_ICONS.filter((name) => !existsSync(join(root, "icons", name)));
+  if (conversion.status !== 0 || stillMissing.length > 0) {
+    console.error(`icon conversion failed (still missing: ${stillMissing.join(", ") || "unknown"})`);
+    process.exit(1);
+  }
+}
+
+// Start from a clean slate so stale artifacts from previous builds never linger in dist/.
+await rm(dist, { recursive: true, force: true });
 
 const result = await Bun.build({
   entrypoints: [join(root, "src/background.ts"), join(root, "src/content.ts"), join(root, "src/popup/popup.ts")],
@@ -28,16 +50,20 @@ await Promise.all(files.map((file) => copyFile(join(root, file), join(dist, file
 await cp(join(root, "icons"), join(dist, "icons"), { recursive: true });
 
 // Local dev config (gitignored) — copied only when present so a fresh checkout still builds.
-// Secret fields are stripped so dist/ can never carry a real API key or PAT into a zip,
-// share, or accidental release; secrets must be set via the popup (chrome.storage).
-const SECRET_CONFIG_FIELDS = ["apiKey", "githubToken"] as const;
+// Secret fields are stripped (scripts/strip-config.ts) so dist/ can never carry a real
+// API key or PAT into a zip, share, or accidental release; secrets are set via the popup.
 const localConfig = join(root, "config.local.json");
 if (existsSync(localConfig)) {
-  const parsed = JSON.parse(await readFile(localConfig, "utf8")) as Record<string, unknown>;
-  const stripped = SECRET_CONFIG_FIELDS.filter((field) => typeof parsed[field] === "string" && parsed[field]);
-  const sanitized = Object.fromEntries(
-    Object.entries(parsed).filter(([key]) => !(SECRET_CONFIG_FIELDS as readonly string[]).includes(key)),
-  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(localConfig, "utf8"));
+  } catch (error) {
+    console.error(
+      `failed to parse config.local.json: ${error instanceof Error ? error.message : String(error)} — fix or remove the file`,
+    );
+    process.exit(1);
+  }
+  const { sanitized, stripped } = sanitizeConfig(parsed);
   await writeFile(join(dist, "config.local.json"), `${JSON.stringify(sanitized, null, 2)}\n`);
   if (stripped.length > 0) {
     console.warn(

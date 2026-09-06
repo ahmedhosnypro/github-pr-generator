@@ -12,7 +12,7 @@ import { isLikelyTemplate } from "../prompts/common";
 import { refineDescription } from "../refinement";
 import type { RepoStyle } from "../repo-style";
 import { EMPTY_REPO_STYLE } from "../repo-style";
-import { buildChangesSummary, hasUsableAnchors } from "../summary";
+import { buildChangesSummary, countUsableAnchors, hasUsableAnchors } from "../summary";
 import { getValidatedConfig } from "./shared";
 
 function extractDiffOutcome(
@@ -35,6 +35,8 @@ function extractDiffOutcome(
       logMsg("Hint: Private repo requires GitHub PAT. Suggesting user to configure it.");
     } else if (diffResult.error === "GITHUB_RATE_LIMITED") {
       logMsg("Hint: GitHub API rate limit hit. Suggesting user to add GitHub PAT for higher limits.");
+    } else if (diffResult.error === "GITHUB_FORBIDDEN") {
+      logMsg("Hint: GitHub 403 with quota remaining — likely SSO enforcement or insufficient PAT permissions.");
     }
     return { diffText: null, hunkRanges: null };
   }
@@ -100,6 +102,7 @@ export async function handleGenerate(
     undefined,
     preserveAuthored,
     signal,
+    countUsableAnchors(data.fileChanges, hunkRanges),
   );
   logMsg("Refinement complete: score " + String(finalScore));
 

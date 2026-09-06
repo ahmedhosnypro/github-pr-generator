@@ -22,7 +22,7 @@ function formatHunkSuffix(hunk: GitHubHunkRange): string {
 }
 
 function hunkLine(refNum: number, anchor: string, hunk: GitHubHunkRange): string {
-  return "    : [[" + String(refNum) + "]](diffhunk://" + anchor + "_" + formatHunkSuffix(hunk);
+  return "    : [[" + String(refNum) + "]](diffhunk://#" + anchor + "_" + formatHunkSuffix(hunk);
 }
 
 function unanchoredHunkLine(refNum: number, filePath: string, hunk: GitHubHunkRange): string {
@@ -45,7 +45,7 @@ function emitAnchoredFile(
     logMsg("buildChangesSummary - invalid diff anchor skipped: " + fc.diffAnchor);
     return { text: "", refNum };
   }
-  let text = "- " + String(refNum) + ". [`" + fc.path + "`](diffhunk://" + anchor + ")\n";
+  let text = "- " + String(refNum) + ". [`" + fc.path + "`](diffhunk://#" + anchor + ")\n";
   const fileHunks = hunkRanges ? hunkRanges[fc.path] : undefined;
   if (fileHunks) {
     for (const hunk of fileHunks) {
@@ -60,8 +60,9 @@ function emitAnchoredFile(
 
 // Cap anchors section for huge diffs — the prompt can only usefully reference
 // the largest N files. Files beyond the cap stay in the changes summary, just
-// without diff links.
-const MAX_ANCHOR_FILES = 50;
+// without diff links. Exported so the refinement anchor check can scale its
+// demand to the actual (capped) anchor supply.
+export const MAX_ANCHOR_FILES = 50;
 
 // Add hunk ranges with diff anchors from DOM scraping. Anchoring is capped:
 // every file gets an anchor after REST hydration, so without a cap the

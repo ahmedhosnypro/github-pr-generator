@@ -10,6 +10,12 @@ import { createSSEParser } from "./sse";
 // out. Abort when no response/token arrives within this window.
 export const STREAM_STALL_TIMEOUT_MS = 60_000;
 
+// The stall watchdog resets on every operation, so a drip-feeding server (one
+// token every few seconds, forever) would stream indefinitely without ever
+// tripping it. This absolute budget caps the whole call — retries and backoff
+// sleeps included — no matter how steadily chunks trickle in.
+export const OVERALL_CALL_TIMEOUT_MS = 5 * 60_000;
+
 // When max_tokens is omitted the provider applies its own default (often
 // small), so long template fills get cut off mid-output and the truncated
 // markdown then fails the downstream fence-balance check in
@@ -19,6 +25,10 @@ export const MAX_COMPLETION_TOKENS = 8192;
 
 function stallError(): Error {
   return new Error("LLM stream stalled: no tokens for " + String(STREAM_STALL_TIMEOUT_MS / 1000) + "s");
+}
+
+function deadlineError(): Error {
+  return new Error("LLM call exceeded overall deadline of " + String(OVERALL_CALL_TIMEOUT_MS / 1000) + "s");
 }
 
 function isAbortException(err: unknown): boolean {
@@ -44,6 +54,22 @@ function withStallWatchdog<T>(pending: Promise<T>, watchdog: AbortController): P
   });
   return Promise.race([pending, stall]).finally(() => {
     clearTimeout(timer);
+  });
+}
+
+/** Sleep for `ms`, rejecting promptly when the caller/deadline signal aborts mid-sleep instead of sleeping through a cancel. */
+function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortErrorFrom(signal));
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortErrorFrom(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -94,20 +120,16 @@ async function postChatCompletion(
   }
 }
 
-async function assertOkResponse(response: Response, errorBody?: string): Promise<void> {
+/** Classify an already-read error body; the (guarded) body read happens at the call site. */
+function throwForErrorResponse(response: Response, errorBody: string): never {
   logMsg("API response status: " + String(response.status));
-  if (!response.ok) {
-    const text = errorBody ?? (await response.text());
-    logMsg("API error body: " + text.substring(0, 300));
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(
-        "API authentication failed (status " +
-          String(response.status) +
-          "). Check your API key in the extension popup.",
-      );
-    }
-    throw new Error("API error " + String(response.status) + ": " + text.substring(0, 200));
+  logMsg("API error body: " + errorBody.substring(0, 300));
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      "API authentication failed (status " + String(response.status) + "). Check your API key in the extension popup.",
+    );
   }
+  throw new Error("API error " + String(response.status) + ": " + errorBody.substring(0, 200));
 }
 
 /** Incrementally read a text/event-stream response, forwarding each content delta to onChunk. */
@@ -203,11 +225,45 @@ export async function callAPI(
   allowTransientRetry = true,
   callerSignal?: AbortSignal,
 ): Promise<string> {
-  if (callerSignal?.aborted) throw abortErrorFrom(callerSignal);
+  // Absolute deadline spanning retries and backoff sleeps: unlike the
+  // per-operation stall watchdog, this never resets, so a drip-feed stream
+  // cannot keep the call alive forever.
+  const overall = new AbortController();
+  const deadline = setTimeout(() => {
+    overall.abort(deadlineError());
+  }, OVERALL_CALL_TIMEOUT_MS);
+  try {
+    return await callAPIAttempt(
+      config,
+      prompt,
+      temperature,
+      onChunk,
+      allowEmptyRetry,
+      allowTransientRetry,
+      callerSignal,
+      overall.signal,
+    );
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+async function callAPIAttempt(
+  config: ExtensionConfig,
+  prompt: string,
+  temperature: number,
+  onChunk: ((delta: string) => void) | undefined,
+  allowEmptyRetry: boolean,
+  allowTransientRetry: boolean,
+  callerSignal: AbortSignal | undefined,
+  overall: AbortSignal,
+): Promise<string> {
   const watchdog = new AbortController();
-  // Caller cancel and the stall watchdog share one signal toward fetch;
-  // AbortSignal.any forwards whichever aborts first, with its reason.
-  const signal = callerSignal ? AbortSignal.any([callerSignal, watchdog.signal]) : watchdog.signal;
+  // Caller cancel, the overall deadline and the stall watchdog share one
+  // signal toward fetch; AbortSignal.any forwards whichever aborts first,
+  // with its reason.
+  const signal = AbortSignal.any(callerSignal ? [callerSignal, watchdog.signal, overall] : [watchdog.signal, overall]);
+  if (signal.aborted) throw abortErrorFrom(signal);
   // Normalize "https://host/v1/" → "https://host/v1/chat/completions"; the popup
   // test path strips trailing slashes too, so a "//chat" URL would only ever hit
   // this generation path, not validation.
@@ -234,19 +290,22 @@ export async function callAPI(
   // upstream provider's quota tripping (observed on the free gemini route) —
   // the same key works seconds later, so that specific 400 retries too. A
   // genuinely bad key just fails again after the single retry.
-  if (!response.ok && allowTransientRetry) {
-    const errBody = await response.text();
-    const transient =
-      [429, 500, 502, 503, 504].includes(response.status) ||
-      (response.status === 400 && /API key not valid/i.test(errBody));
-    if (transient) {
-      logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
-      await new Promise((r) => setTimeout(r, 2000));
-      return callAPI(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal);
+  if (!response.ok) {
+    // A server can send an error status and then stall its body; read it
+    // under the watchdog so that hang fails fast instead of freezing here.
+    const errBody = await withStallWatchdog(response.text(), watchdog);
+    logMsg("API response status: " + String(response.status));
+    if (allowTransientRetry) {
+      const transient =
+        [429, 500, 502, 503, 504].includes(response.status) ||
+        (response.status === 400 && /API key not valid/i.test(errBody));
+      if (transient) {
+        logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
+        await sleepOrAbort(2000, signal);
+        return callAPIAttempt(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal, overall);
+      }
     }
-    await assertOkResponse(response, errBody);
-  } else {
-    await assertOkResponse(response);
+    throwForErrorResponse(response, errBody);
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -268,8 +327,8 @@ export async function callAPI(
     // in parallel lab runs); retry the whole request once before failing.
     if (allowEmptyRetry) {
       logMsg("No content in API response — retrying once");
-      await new Promise((r) => setTimeout(r, 1000));
-      return callAPI(config, prompt, temperature, onChunk, false, true, callerSignal);
+      await sleepOrAbort(1000, signal);
+      return callAPIAttempt(config, prompt, temperature, onChunk, false, true, callerSignal, overall);
     }
     logMsg("No content in API response");
     throw new Error("No content in API response");

@@ -1,6 +1,17 @@
 // Single source of truth for "is a commit represented in a description".
 // Used by both the extension refinement loop (refinement-checks.ts) and the
 // test harness (tests/testkit.ts) so scoring never drifts.
+
+// How many commits the generation prompt lists (summary.ts). Coverage is
+// scored against this listed subset only: past it the coverage bar becomes
+// mathematically unreachable (the model cannot mention commits it never saw).
+export const MAX_LISTED_COMMITS = 150;
+
+// The listed subset of commit messages — what the prompt showed the model and
+// therefore the universe the coverage check may judge.
+export function listedCommits(commitMessages: string[]): string[] {
+  return commitMessages.slice(0, MAX_LISTED_COMMITS);
+}
 //
 // Semantics: a commit is covered when any >3-char word of its HEADLINE (first
 // line) appears verbatim (case-insensitively) in the description text.

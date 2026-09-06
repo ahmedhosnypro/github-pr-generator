@@ -2,34 +2,7 @@ import { countCoveredCommits, coverageThreshold } from "../src/background/commit
 import { ensureArtifactEnding, wrapLongProseLines } from "../src/background/description-normalize";
 import { scoreDescription } from "../src/background/refinement-checks";
 import { expectMatch, getFailures } from "./expect-helpers";
-
-const FULL_DESCRIPTION = [
-  "## Summary",
-  "Fixed the token expiry race by refreshing before each request.",
-  "",
-  "## Changes",
-  "- **Auth** — refresh token early [[1]](diffhunk://#diff-aaaa_L1-R2)",
-  "- **Client** — retries once [[2]](diffhunk://#diff-bbbb_L3-R4)",
-  "- **Tests** — covers the race [[3]](diffhunk://#diff-cccc_L5-R6)",
-  "",
-  "## Testing",
-  "1. Run the suite",
-  "```bash",
-  "bun run test",
-  "```",
-  "Expected: all green",
-  "",
-  "2. Retry with an expired token",
-  "```bash",
-  "bun run dev",
-  "```",
-  "Expected: request succeeds after refresh",
-  "",
-  "Scope: 3 files, +10/-2",
-].join("\n");
-
-const SMALL_STATS = { files: 1, additions: 5, deletions: 2 };
-const LARGE_STATS = { files: 12, additions: 600, deletions: 40 };
+import { FULL_DESCRIPTION, LARGE_STATS, SMALL_STATS } from "./refinement-shared";
 
 // Anchors only demanded when the PR has usable scrape targets (run 5/8).
 async function testAnchorGating(): Promise<void> {
@@ -216,7 +189,7 @@ async function testArtifactEnding(): Promise<void> {
 }
 
 // Commit coverage: word-match semantics + the scaled threshold curve.
-function testCommitCoverage(): void {
+async function testCommitCoverage(): Promise<void> {
   const msgList = ["fix(auth): refresh token race", "docs: update readme", "chore: bump deps"];
   expectMatch(
     "headline word matches count coverage",
@@ -233,60 +206,23 @@ function testCommitCoverage(): void {
   expectMatch("threshold: 122 commits declines to the 60% floor", coverageThreshold(122), 0.6);
   expectMatch("threshold: 80 commits is 0.6 via linear decline", coverageThreshold(80), 0.6);
   expectMatch("threshold: 50 commits is 0.75 (mid-range)", coverageThreshold(50), 0.9 - 30 * 0.005);
-}
 
-const AUTHORED_BODY = [
-  "This fixes the token expiry race I hit while dogfooding the extension.",
-  "",
-  "## Testing",
-  "1. Run the suite",
-  "```bash",
-  "bun run test",
-  "```",
-  "Expected: all green",
-  "",
-  "2. Retry with an expired token",
-  "```bash",
-  "bun run dev",
-  "```",
-  "Expected: request succeeds after refresh",
-  "",
-  "Closes #42",
-].join("\n");
-
-// Preserve-authored mode: when the PR body already carries human-written prose,
-// the scorer must only demand the polish checks (6 max), not the full scaffold.
-async function testPreserveAuthoredMode(): Promise<void> {
-  const preserved = await scoreDescription(AUTHORED_BODY, [], false, null, "preserve-authored");
+  // Regression: coverage is judged against the listed commits (the 150 the
+  // prompt shows), not the full array — above ~250 commits the old 60% floor
+  // was mathematically unreachable.
+  const manyCommits = Array.from({ length: 300 }, (_, i) => `feat: implement gadget${String(i)} module`);
+  const coveredNames = Array.from({ length: 100 }, (_, i) => "gadget" + String(i)).join(" ");
+  const covering = "Ships " + coveredNames + ".";
+  const scoredEnough = await scoreDescription(covering, manyCommits, false);
   expectMatch(
-    "preserve mode passes authored body without restructuring",
-    preserved.failures.length === 0 && preserved.score === preserved.maxScore && preserved.maxScore === 6,
+    "60% of the 150 listed commits satisfies coverage on a 300-commit PR",
+    scoredEnough.failures.every((f) => f.check !== "commitCoverage"),
     true,
   );
-
-  const full = await scoreDescription(AUTHORED_BODY, [], false, null);
+  const underCovered = await scoreDescription(`Ships gadget0 only.`, manyCommits, false);
   expectMatch(
-    "full mode still demands the scaffold on the same body",
-    full.failures.some((f) => f.check === "opener") && full.failures.some((f) => f.check === "boldLabelBullets"),
-    true,
-  );
-  expectMatch("preserve mode maxScore is smaller than full mode", preserved.maxScore < full.maxScore, true);
-
-  const unbalanced = `${AUTHORED_BODY}\n\`\`\`bash\noops\n`;
-  expectMatch(
-    "unbalanced fence still fails in preserve mode",
-    (await scoreDescription(unbalanced, [], false, null, "preserve-authored")).failures.some(
-      (f) => f.check === "fences",
-    ),
-    true,
-  );
-
-  const withoutTesting = "This fixes the token expiry race I hit while dogfooding the extension.";
-  expectMatch(
-    "missing Testing section still flagged in preserve mode",
-    (await scoreDescription(withoutTesting, [], false, LARGE_STATS, "preserve-authored")).failures.some(
-      (f) => f.check === "testingSteps",
-    ),
+    "thin coverage on the listed subset still fails",
+    underCovered.failures.some((f) => f.check === "commitCoverage" && f.detail.includes("1/150")),
     true,
   );
 }
@@ -297,8 +233,7 @@ async function main(): Promise<void> {
   await testSmallDiffLeniency();
   testProseWrap();
   await testArtifactEnding();
-  testCommitCoverage();
-  await testPreserveAuthoredMode();
+  await testCommitCoverage();
 
   const failures = getFailures();
   if (failures > 0) {

@@ -1,9 +1,61 @@
-import { apiEndpointError, apiKeyInput, connectionStatus, connectionStatusText, endpointInput } from "./elements";
+import {
+  apiEndpointError,
+  apiKeyInput,
+  connectionStatus,
+  connectionStatusText,
+  endpointInput,
+  insecureEndpointWarning,
+} from "./elements";
+import { isTimeoutError, parseUrlOrNull } from "./messaging";
 import { hasEndpointPermission } from "./permissions";
 import { stripTrailingSlashes } from "./text";
 
 const ERROR_CLASS = "md-text-field__input--error";
-let validationTimeout: ReturnType<typeof setTimeout> | null = null;
+const VALIDATE_TIMEOUT_MS = 10_000;
+/** Monotonic counter: only the newest validation attempt may touch the UI. */
+let validationSeq = 0;
+
+// Status text changes must be announced; popup.html has no live regions.
+connectionStatus.setAttribute("aria-live", "polite");
+apiEndpointError.setAttribute("aria-live", "polite");
+insecureEndpointWarning.setAttribute("aria-live", "polite");
+
+const INSECURE_WARNING_TEXT =
+  "Warning: this endpoint uses plain HTTP. Your API key will be sent in cleartext over an unencrypted connection.";
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // The URL parser normalizes IPv4 (octal/hex/decimal literals included), so a
+  // "127." prefix check covers the whole [IP_REDACTED]/8 loopback block.
+  if (host.startsWith("127.")) return true;
+  // Hostname for IPv6 includes brackets under the WHATWG URL spec.
+  return host === "[[IP_REDACTED]]" || host === "[IP_REDACTED]";
+}
+
+/** True when the endpoint would carry the Bearer token over cleartext HTTP to a non-loopback host. */
+function isInsecureHttpEndpoint(value: string): boolean {
+  const url = parseUrlOrNull(value.trim());
+  if (url === null || url.protocol !== "http:") return false;
+  return !isLoopbackHostname(url.hostname);
+}
+
+function updateInsecureEndpointWarning(): void {
+  const insecure = isInsecureHttpEndpoint(endpointInput.value);
+  insecureEndpointWarning.textContent = insecure ? INSECURE_WARNING_TEXT : "";
+  insecureEndpointWarning.classList.toggle("visible", insecure);
+}
+
+// Pure UI updates only — no fetch. The input listener tracks live edits;
+// load.ts fills the field programmatically after storage resolves (no input
+// event), so re-check briefly after popup open until the field settles.
+endpointInput.addEventListener("input", updateInsecureEndpointWarning);
+let openChecks = 0;
+const openCheckTimer = setInterval(() => {
+  updateInsecureEndpointWarning();
+  openChecks += 1;
+  if (openChecks >= 20 || endpointInput.value.trim() !== "") clearInterval(openCheckTimer);
+}, 100);
 
 function setConnectionStatus(status: string, message: string): void {
   connectionStatus.className = "status-indicator status-indicator--" + status;
@@ -32,8 +84,12 @@ export function resetEndpointFieldError(): void {
 }
 
 function handleValidateResponse(response: Response): void {
-  if (response.ok || response.status === 401 || response.status === 403) {
-    clearEndpointError("connected", "Connected");
+  if (response.ok) {
+    const insecure = isInsecureHttpEndpoint(endpointInput.value);
+    clearEndpointError(
+      "connected",
+      insecure ? "Connected (warning: insecure HTTP, API key sent in cleartext)" : "Connected",
+    );
   } else {
     showEndpointError("Error: " + String(response.status), "Server returned " + String(response.status));
   }
@@ -45,6 +101,10 @@ export function showEndpointPermissionError(): void {
 }
 
 async function handleValidateError(err: unknown): Promise<void> {
+  if (isTimeoutError(err)) {
+    showEndpointError("Timed out", "No response within " + String(VALIDATE_TIMEOUT_MS / 1000) + " seconds");
+    return;
+  }
   // A fetch TypeError here is almost always the MV3 host-permission block on
   // non-declared origins (Chrome says "Failed to fetch", never "CORS"), so
   // probe the permission state instead of guessing from the message.
@@ -57,29 +117,36 @@ async function handleValidateError(err: unknown): Promise<void> {
 }
 
 export function validateEndpoint(): void {
+  const seq = ++validationSeq;
+  updateInsecureEndpointWarning();
   const url = endpointInput.value.trim();
   if (!url) {
     clearEndpointError("", "Not validated");
     return;
   }
-  if (URL.parse(url) === null) {
+  if (parseUrlOrNull(url) === null) {
     showEndpointError("Invalid URL", "Please enter a valid URL");
     return;
   }
   setConnectionStatus("validating", "Validating...");
-  fetch(stripTrailingSlashes(url) + "/models", {
-    method: "GET",
-    headers: {
-      Authorization: "Bearer " + apiKeyInput.value.trim(),
-      "Content-Type": "application/json",
-    },
-    mode: "cors",
-  })
-    .then(handleValidateResponse)
-    .catch(handleValidateError);
+  void runValidateAttempt(seq, url);
 }
 
-export function validateEndpointDebounced(): void {
-  if (validationTimeout) clearTimeout(validationTimeout);
-  validationTimeout = setTimeout(validateEndpoint, 500);
+async function runValidateAttempt(seq: number, url: string): Promise<void> {
+  try {
+    const response = await fetch(stripTrailingSlashes(url) + "/models", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer " + apiKeyInput.value.trim(),
+        "Content-Type": "application/json",
+      },
+      mode: "cors",
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+    });
+    if (seq !== validationSeq) return; // a newer attempt superseded this one
+    handleValidateResponse(response);
+  } catch (err) {
+    if (seq !== validationSeq) return;
+    await handleValidateError(err);
+  }
 }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { watch } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { join, relative } from "node:path";
 
 const root = join(import.meta.dir, "..");
 
@@ -9,7 +9,7 @@ const WATCHED_ROOT_FILES = new Set(["manifest.json", "styles.css", "config.local
 const WATCHED_DIRS = ["src", "popup", "icons"];
 
 async function collectDirs(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   const subdirs = entries.filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name));
   const nested = await Promise.all(subdirs.map(collectDirs));
   return [dir, ...nested.flat()];
@@ -53,12 +53,30 @@ watch(root, (_event, filename) => {
   if (filename && WATCHED_ROOT_FILES.has(filename)) onChange(filename);
 });
 
-for (const dir of WATCHED_DIRS) {
-  for (const watched of await collectDirs(join(root, dir))) {
-    watch(watched, (_event, filename) => {
-      if (filename) onChange(`${dir}/${filename}`);
+const watchedDirs = new Set<string>();
+
+async function watchTree(dir: string): Promise<void> {
+  for (const subdir of await collectDirs(dir)) {
+    if (watchedDirs.has(subdir)) continue;
+    watchedDirs.add(subdir);
+    watch(subdir, (event, filename) => {
+      if (!filename) return;
+      const fullPath = join(subdir, filename);
+      onChange(relative(root, fullPath));
+      // rename events cover directory creation/deletion; pick up any new dir
+      // (with its whole subtree) so later changes inside it are watched too.
+      if (event === "rename") void watchIfDir(fullPath);
     });
   }
+}
+
+async function watchIfDir(path: string): Promise<void> {
+  const info = await stat(path).catch(() => null);
+  if (info?.isDirectory()) await watchTree(path);
+}
+
+for (const dir of WATCHED_DIRS) {
+  await watchTree(join(root, dir));
 }
 
 console.log("[dev] watching src/, popup/, icons/, manifest.json, styles.css, config.local.json");

@@ -1,4 +1,9 @@
-import type { ExtensionConfig, GenerateDescriptionResponse, OpenedPRData } from "../../types";
+import type {
+  ApplyDescriptionResponse,
+  ApplyDescriptionUpdateData,
+  GenerateDescriptionResponse,
+  OpenedPRData,
+} from "../../types";
 import { hydrateMissingDiffAnchors } from "../anchor-hash";
 import { discoverRepoStyle } from "../github/discovery";
 import { updatePRField } from "../github/pr";
@@ -9,30 +14,18 @@ import { parseDescriptionOnlyResponse } from "../parse";
 import { isLikelyTemplate } from "../prompts/common";
 import { buildDescriptionOnlyPrompt } from "../prompts/pr-prompts";
 import { refineDescription } from "../refinement";
-import { buildChangesSummary, hasUsableAnchors } from "../summary";
-import type { GatheredPRData } from "./shared";
-import { gatherForFieldUpdate } from "./shared";
+import { buildChangesSummary, countUsableAnchors, hasUsableAnchors } from "../summary";
+import { gatherForFieldUpdate, prepareFieldApply } from "./shared";
 
 const TOKEN_REQUIRED_MESSAGE =
   "GitHub Personal Access Token is required to update PR description. Set it in the extension popup (needs 'repo' scope).";
 
-async function applyDescriptionUpdate(
-  config: ExtensionConfig,
-  gathered: GatheredPRData,
-  newDescription: string,
-): Promise<GenerateDescriptionResponse> {
-  const updateResult = await updatePRField(config, gathered.owner, gathered.repo, gathered.prNumber, {
-    body: newDescription,
-  });
-  if ("error" in updateResult) {
-    if (updateResult.error === "GITHUB_NO_TOKEN") {
-      throw new Error(TOKEN_REQUIRED_MESSAGE);
-    }
-    throw new Error("Failed to update PR description: " + (updateResult.message || updateResult.error));
-  }
-  return { body: newDescription, updated: true };
-}
-
+/**
+ * Generate phase of the opened-PR description flow: gathers context, calls the
+ * LLM (plus refinement) and returns the proposal. It never PATCHes — the
+ * content script shows the result in a review panel and only
+ * applyDescriptionUpdate (below) writes.
+ */
 export async function handleGenerateDescription(data: OpenedPRData): Promise<GenerateDescriptionResponse> {
   const { config, gathered, linkedIssues, stats } = await gatherForFieldUpdate(
     "handleGenerateDescription",
@@ -82,6 +75,8 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
     stats,
     undefined,
     preserveAuthored,
+    undefined,
+    countUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
   );
   logMsg("Refinement complete: score " + String(finalScore));
 
@@ -99,5 +94,30 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
       ")",
   );
 
-  return applyDescriptionUpdate(config, gathered, finalDescription);
+  return { body: finalDescription, updated: false };
+}
+
+/**
+ * Apply phase: the user reviewed (and possibly edited) the proposal and clicked
+ * "Apply to PR". PATCHes exactly the approved body.
+ */
+export async function handleApplyDescriptionUpdate(
+  data: ApplyDescriptionUpdateData,
+): Promise<ApplyDescriptionResponse> {
+  const { config, owner, repo, prNumber, text } = await prepareFieldApply(
+    "handleApplyDescriptionUpdate",
+    data,
+    "description",
+    data.body,
+    TOKEN_REQUIRED_MESSAGE,
+  );
+
+  const updateResult = await updatePRField(config, owner, repo, prNumber, { body: text });
+  if ("error" in updateResult) {
+    if (updateResult.error === "GITHUB_NO_TOKEN") {
+      throw new Error(TOKEN_REQUIRED_MESSAGE);
+    }
+    throw new Error("Failed to update PR description: " + (updateResult.message || updateResult.error));
+  }
+  return { body: text, updated: true };
 }

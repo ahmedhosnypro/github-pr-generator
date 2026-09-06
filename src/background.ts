@@ -1,9 +1,9 @@
 import { getConfig } from "./background/config";
 import { handleSaveConfig } from "./background/config-save";
-import { handleGenerateDescription } from "./background/handlers/description";
+import { handleApplyDescriptionUpdate, handleGenerateDescription } from "./background/handlers/description";
 import { handleGenerate } from "./background/handlers/generate";
 import { handleGenerateMergeDescription, handleGenerateMergeTitle } from "./background/handlers/merge";
-import { handleGenerateTitle } from "./background/handlers/title";
+import { handleApplyTitleUpdate, handleGenerateTitle } from "./background/handlers/title";
 import { errorMessage, logMsg } from "./background/log";
 import { registerStreamListener } from "./background/stream";
 import type { ExtensionMessage, GetConfigResponse, MessageErrorResponse } from "./types";
@@ -49,15 +49,30 @@ function relayOpenedPR(message: ExtensionMessage, sendResponse: SendResponse): b
       return relayAsync(
         handleGenerateTitle(message.data ?? {}),
         sendResponse,
-        (r) => "generateTitle success - title: " + r.title,
+        (r) => "generateTitle success - proposal length: " + String((r.title || "").length),
         "generateTitle error: ",
       );
     case "generateDescription":
       return relayAsync(
         handleGenerateDescription(message.data ?? {}),
         sendResponse,
-        (r) => "generateDescription success - body length: " + String((r.body || "").length),
+        (r) => "generateDescription success - proposal length: " + String((r.body || "").length),
         "generateDescription error: ",
+      );
+    // Apply phase of the review gate: the only message types allowed to PATCH.
+    case "applyTitleUpdate":
+      return relayAsync(
+        handleApplyTitleUpdate(message.data ?? {}),
+        sendResponse,
+        () => "applyTitleUpdate success",
+        "applyTitleUpdate error: ",
+      );
+    case "applyDescriptionUpdate":
+      return relayAsync(
+        handleApplyDescriptionUpdate(message.data ?? {}),
+        sendResponse,
+        () => "applyDescriptionUpdate success",
+        "applyDescriptionUpdate error: ",
       );
     case "generateMergeTitle":
       return relayAsync(

@@ -107,11 +107,99 @@ async function testInvalidPrNumberQueryInjection(): Promise<void> {
   expectMatch("query-injected prNumber means fallback never fires", calls, 1);
 }
 
+// (4) 429 → GITHUB_RATE_LIMITED (primary signal: status 429).
+async function testRateLimited429(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(new Response("rate limited", { status: 429, headers: { "X-RateLimit-Remaining": "40" } })),
+    async () => {
+      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      expectMatch(
+        "429 maps to GITHUB_RATE_LIMITED",
+        out !== null && "error" in out && out.error,
+        "GITHUB_RATE_LIMITED",
+      );
+    },
+  );
+}
+
+// (5) 403 + X-RateLimit-Remaining: 0 → GITHUB_RATE_LIMITED.
+async function testRateLimited403(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "0" } })),
+    async () => {
+      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      expectMatch(
+        "403 with remaining 0 maps to GITHUB_RATE_LIMITED",
+        out !== null && "error" in out && out.error,
+        "GITHUB_RATE_LIMITED",
+      );
+    },
+  );
+}
+
+// (6) 403 with quota remaining → GITHUB_FORBIDDEN (SSO/permissions), even at
+// 429's sibling status the header alone decides. No header → also FORBIDDEN.
+async function testForbidden403(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "42" } })),
+    async () => {
+      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      expectMatch(
+        "403 with remaining 42 maps to GITHUB_FORBIDDEN",
+        out !== null && "error" in out && out.error,
+        "GITHUB_FORBIDDEN",
+      );
+    },
+  );
+  await withFetch(
+    () => Promise.resolve(new Response("forbidden", { status: 403 })),
+    async () => {
+      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      expectMatch(
+        "403 without rate-limit header maps to GITHUB_FORBIDDEN",
+        out !== null && "error" in out && out.error,
+        "GITHUB_FORBIDDEN",
+      );
+    },
+  );
+}
+
+// (7) Timeout: fetch rejects with the DOMException AbortSignal.timeout would
+// raise → GITHUB_NETWORK_ERROR with a timeout message (not a hang). Also
+// verifies the outgoing request carries an AbortSignal.
+async function testFetchTimeout(): Promise<void> {
+  let sawSignal = false;
+  await withFetch(
+    (_url, init) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return Promise.reject(new DOMException("The operation timed out.", "TimeoutError"));
+    },
+    async () => {
+      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      expectMatch(
+        "timeout maps to GITHUB_NETWORK_ERROR",
+        out !== null && "error" in out && out.error,
+        "GITHUB_NETWORK_ERROR",
+      );
+      expectMatch(
+        "timeout message mentions it was a timeout",
+        out !== null && "error" in out && typeof out.message === "string" && out.message.includes("timed out"),
+        true,
+      );
+    },
+  );
+  expectMatch("request carries an AbortSignal", sawSignal, true);
+}
+
 async function main(): Promise<void> {
   console.log("=== Diff Fetch Tests ===\n");
   await testInvalidPrNumberTraversal();
   await testValidPrNumberFallback();
   await testInvalidPrNumberQueryInjection();
+  await testRateLimited429();
+  await testRateLimited403();
+  await testForbidden403();
+  await testFetchTimeout();
 
   const failures = getFailures();
   if (failures > 0) {

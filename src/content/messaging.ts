@@ -3,7 +3,7 @@ import type { KeepaliveResponse, MessageErrorResponse } from "../responses";
 import { errorMessage } from "./errors";
 import { log } from "./log";
 
-// Wraps chrome.runtime.sendMessage with two safeguards required for MV3
+// Wraps chrome.runtime.sendMessage with three safeguards for MV3
 // service workers:
 //   1. Keepalive pings: Chrome terminates an idle service worker (~30s).
 //      A long-running API call (large PR, streaming aggregation) can exceed
@@ -13,6 +13,14 @@ import { log } from "./log";
 //      25s resets its idle timer and keeps the channel open.
 //   2. One retry: if the channel still drops (SW was already gone), the call
 //      is retried once — the second attempt wakes a fresh SW.
+//   3. Overall timeout (SEND_TIMEOUT_MS): if the response is simply lost, the
+//      promise rejects instead of leaving the UI pending forever.
+
+// Keepalive resets the SW idle timer but cannot help a genuinely lost call
+// (SW crash, wedged channel): without an overall cap the UI would wait
+// forever, so reject outright once the window is exhausted. Generous because
+// non-streamed calls can span a slow LLM response.
+const SEND_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface PendingCall<R> {
   message: ExtensionMessage;
@@ -20,21 +28,33 @@ interface PendingCall<R> {
   reject: (reason: Error) => void;
   done: boolean;
   pingTimer: ReturnType<typeof setInterval> | null;
+  timeoutTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export function sendToBackground<R>(message: ExtensionMessage): Promise<R | MessageErrorResponse> {
   return new Promise((resolve, reject) => {
-    const call: PendingCall<R> = { message, resolve, reject, done: false, pingTimer: null };
+    const call: PendingCall<R> = { message, resolve, reject, done: false, pingTimer: null, timeoutTimer: null };
     // Ping every 25s while outstanding to reset the SW idle timer.
     call.pingTimer = startKeepalive(call);
+    call.timeoutTimer = setTimeout(() => {
+      if (call.done) return;
+      clearTimers(call);
+      call.done = true;
+      log("error", "sendToBackground timed out after " + String(SEND_TIMEOUT_MS / 1000) + "s (" + message.type + ")");
+      call.reject(new Error("No response from background within " + String(SEND_TIMEOUT_MS / 1000) + "s"));
+    }, SEND_TIMEOUT_MS);
     attemptSend(call, 1);
   });
 }
 
-function clearPing<R>(call: PendingCall<R>): void {
+function clearTimers<R>(call: PendingCall<R>): void {
   if (call.pingTimer) {
     clearInterval(call.pingTimer);
     call.pingTimer = null;
+  }
+  if (call.timeoutTimer) {
+    clearTimeout(call.timeoutTimer);
+    call.timeoutTimer = null;
   }
 }
 
@@ -61,7 +81,7 @@ function handleSendError<R>(call: PendingCall<R>, remaining: number, err: unknow
     }, 250);
     return;
   }
-  clearPing(call);
+  clearTimers(call);
   call.done = true;
   call.reject(err instanceof Error ? err : new Error(msgText));
 }
@@ -75,7 +95,7 @@ function handleResponse<R>(call: PendingCall<R>, remaining: number, resp: unknow
   // { error: ... } (background rejected). Distinguish by checking resp: if we have
   // an object, the messaging succeeded and lastError is just informational.
   if (resp !== undefined && resp !== null) {
-    clearPing(call);
+    clearTimers(call);
     call.done = true;
     call.resolve(resp as R | MessageErrorResponse);
     return;
@@ -88,7 +108,7 @@ function handleResponse<R>(call: PendingCall<R>, remaining: number, resp: unknow
     }, 250);
     return;
   }
-  clearPing(call);
+  clearTimers(call);
   call.done = true;
   call.reject(err ? new Error(errMsg) : new Error("No response from background"));
 }
@@ -96,7 +116,7 @@ function handleResponse<R>(call: PendingCall<R>, remaining: number, resp: unknow
 function startKeepalive<R>(call: PendingCall<R>): ReturnType<typeof setInterval> {
   return setInterval(() => {
     if (call.done) {
-      clearPing(call);
+      clearTimers(call);
       return;
     }
     sendPing();

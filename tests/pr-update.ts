@@ -2,10 +2,38 @@
 // the GitHub write/read paths: token/context guards, prNumber validation,
 // success mapping, per-status error codes, and network failure handling.
 // Mocks global fetch — no real network.
+// Second section covers the two-phase opened-PR review gate:
+// handleGenerateTitle/handleGenerateDescription only PROPOSE (never PATCH);
+// handleApplyTitleUpdate/handleApplyDescriptionUpdate PATCH exactly the
+// user-approved text after re-validating coordinates, text, and token.
 import { fetchPRDetails, updatePRField } from "../src/background/github/pr";
 import type { PRUpdateFields } from "../src/github-types";
 import type { ExtensionConfig } from "../src/types";
-import { expectMatch, getFailures } from "./expect-helpers";
+import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
+import {
+  captureRejection,
+  chainHandlers,
+  githubPrHandler,
+  installBackgroundHarness,
+  llmCallCount,
+  llmResponder,
+  patchCalls,
+  resetHarness,
+} from "./handlers-harness";
+
+// Harness must be installed before importing the background handlers:
+// config.ts touches chrome.runtime at module scope.
+const bgHarness = installBackgroundHarness();
+const { handleGenerateTitle, handleApplyTitleUpdate } = await import("../src/background/handlers/title");
+const { handleApplyDescriptionUpdate, handleGenerateDescription } = await import(
+  "../src/background/handlers/description"
+);
+
+const OPENED = { owner: "octo", repo: "demo", prNumber: "123" };
+const TITLE_TOKEN_MESSAGE =
+  "GitHub Personal Access Token is required to update PR title. Set it in the extension popup (needs 'repo' scope).";
+const DESC_TOKEN_MESSAGE =
+  "GitHub Personal Access Token is required to update PR description. Set it in the extension popup (needs 'repo' scope).";
 
 const BASE_CONFIG: ExtensionConfig = {
   apiEndpoint: "https://probe.invalid/v1",
@@ -197,6 +225,97 @@ async function testErrorBranches(): Promise<void> {
   );
 }
 
+// === Two-phase opened-PR review gate ===
+
+// Generate phase: returns the LLM proposal and explicitly does not PATCH.
+async function testGenerateTitleIsProposalOnly(): Promise<void> {
+  resetHarness(bgHarness, {}, chainHandlers(llmResponder(["Polished Widget Title"]), githubPrHandler()));
+  const result = await handleGenerateTitle(OPENED);
+  expectMatch("two-phase: generate title returns the proposal", result.title, "Polished Widget Title");
+  expectMatch("two-phase: generate title reports not updated", result.updated, false);
+  expectMatch("two-phase: generate title performs no PATCH", patchCalls(bgHarness).length, 0);
+}
+
+async function testGenerateDescriptionIsProposalOnly(): Promise<void> {
+  resetHarness(
+    bgHarness,
+    {},
+    chainHandlers(llmResponder(["## Summary\nMock description body for proposal."]), githubPrHandler()),
+  );
+  const result = await handleGenerateDescription(OPENED);
+  expectIncludes("two-phase: generate description returns the proposal", result.body, "Mock description body");
+  expectMatch("two-phase: generate description reports not updated", result.updated, false);
+  expectMatch("two-phase: generate description performs no PATCH", patchCalls(bgHarness).length, 0);
+}
+
+// Apply phase: PATCHes exactly the user-approved text, nothing else.
+async function testApplyTitlePatchesApprovedText(): Promise<void> {
+  resetHarness(bgHarness, {}, githubPrHandler());
+  const result = await handleApplyTitleUpdate({ ...OPENED, title: "User-edited approved title" });
+  expectMatch("apply title reports updated", result.updated, true);
+  const patches = patchCalls(bgHarness);
+  expectMatch("apply title performs exactly one PATCH", patches.length, 1);
+  expectMatch("apply title PATCHes exactly the approved text", patches[0]?.body.title, "User-edited approved title");
+  expectMatch("apply title does not touch the body field", "body" in (patches[0]?.body ?? {}), false);
+  expectMatch("apply title never calls the LLM", llmCallCount(bgHarness), 0);
+}
+
+async function testApplyDescriptionPatchesApprovedText(): Promise<void> {
+  resetHarness(bgHarness, {}, githubPrHandler());
+  const approved = "## Edited\nby the reviewer before applying";
+  const result = await handleApplyDescriptionUpdate({ ...OPENED, body: approved });
+  expectMatch("apply description reports updated", result.updated, true);
+  const patches = patchCalls(bgHarness);
+  expectMatch("apply description performs exactly one PATCH", patches.length, 1);
+  expectMatch("apply description PATCHes exactly the approved text", patches[0]?.body.body, approved);
+  expectMatch("apply description does not touch the title field", "title" in (patches[0]?.body ?? {}), false);
+  expectMatch("apply description never calls the LLM", llmCallCount(bgHarness), 0);
+}
+
+// Apply validation: empty/blank text, missing coordinates, missing token all
+// reject before any PATCH is attempted.
+async function testApplyRejectsEmptyText(): Promise<void> {
+  resetHarness(bgHarness, {}, githubPrHandler());
+  const titleMessage = await captureRejection(() => handleApplyTitleUpdate({ ...OPENED, title: "   " }));
+  expectMatch("apply title rejects blank text", titleMessage, "Cannot apply an empty title to the PR.");
+  const missingMessage = await captureRejection(() => handleApplyTitleUpdate({ ...OPENED }));
+  expectMatch("apply title rejects missing text", missingMessage, "Cannot apply an empty title to the PR.");
+  const descMessage = await captureRejection(() => handleApplyDescriptionUpdate({ ...OPENED, body: "" }));
+  expectMatch("apply description rejects empty text", descMessage, "Cannot apply an empty description to the PR.");
+  expectMatch("rejected apply performs no PATCH", patchCalls(bgHarness).length, 0);
+}
+
+async function testApplyRejectsMissingContext(): Promise<void> {
+  resetHarness(bgHarness, {}, githubPrHandler());
+  const message = await captureRejection(() => handleApplyTitleUpdate({ title: "Some title" }));
+  expectMatch(
+    "apply title rejects missing owner/repo/prNumber",
+    message,
+    "Missing PR owner/repo/number for the title update.",
+  );
+  expectMatch("missing-context apply performs no PATCH", patchCalls(bgHarness).length, 0);
+}
+
+async function testApplyRequiresToken(): Promise<void> {
+  resetHarness(bgHarness, { githubToken: "" }, githubPrHandler());
+  const titleMessage = await captureRejection(() => handleApplyTitleUpdate({ ...OPENED, title: "Some title" }));
+  expectMatch("apply title without a PAT rejects with the token message", titleMessage, TITLE_TOKEN_MESSAGE);
+  const descMessage = await captureRejection(() => handleApplyDescriptionUpdate({ ...OPENED, body: "Some body" }));
+  expectMatch("apply description without a PAT rejects with the token message", descMessage, DESC_TOKEN_MESSAGE);
+  expectMatch("tokenless apply performs no PATCH", patchCalls(bgHarness).length, 0);
+}
+
+// Apply-phase PATCH failure surfaces the GitHub error to the UI.
+async function testApplySurfacesPatchFailure(): Promise<void> {
+  resetHarness(bgHarness, {}, githubPrHandler({ patchStatus: 403 }));
+  const message = await captureRejection(() => handleApplyTitleUpdate({ ...OPENED, title: "Some title" }));
+  expectMatch(
+    "apply title surfaces the 403 update failure",
+    message,
+    "Failed to update PR title: GitHub PAT may lack repo scope or insufficient permissions.",
+  );
+}
+
 async function main(): Promise<void> {
   console.log("=== PR Update Tests ===\n");
   await testNoToken();
@@ -204,6 +323,15 @@ async function main(): Promise<void> {
   await testInvalidPrNumber();
   await testSuccess();
   await testErrorBranches();
+  console.log("\n=== Two-Phase Review Gate Tests ===\n");
+  await testGenerateTitleIsProposalOnly();
+  await testGenerateDescriptionIsProposalOnly();
+  await testApplyTitlePatchesApprovedText();
+  await testApplyDescriptionPatchesApprovedText();
+  await testApplyRejectsEmptyText();
+  await testApplyRejectsMissingContext();
+  await testApplyRequiresToken();
+  await testApplySurfacesPatchFailure();
 
   const failures = getFailures();
   if (failures > 0) {

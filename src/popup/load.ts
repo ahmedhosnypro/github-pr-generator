@@ -1,3 +1,4 @@
+import { resolveConfig } from "../config-resolve";
 import type { FileConfig, StoredConfig } from "../types";
 import {
   apiKeyInput,
@@ -8,9 +9,9 @@ import {
   githubTokenInput,
   modelInput,
 } from "./elements";
+import { diffLimitOrDefault } from "./save";
 import { markLoaded } from "./state";
-import { selectThinkingEffort, toThinkingEffort, updateDiffConditionalVisibility } from "./ui";
-import { validateEndpointDebounced } from "./validate";
+import { selectThinkingEffort, updateDiffConditionalVisibility } from "./ui";
 
 const STORAGE_KEYS = [
   "apiEndpoint",
@@ -22,18 +23,6 @@ const STORAGE_KEYS = [
   "diffMaxLines",
   "diffMaxBytes",
 ];
-
-/** Popup-side merge of direct storage and config.local.json. */
-interface ResolvedSettings {
-  apiEndpoint?: string;
-  apiKey?: string;
-  model?: string;
-  githubToken?: string;
-  thinkingEffort?: string;
-  diffEnabled?: boolean | string;
-  diffMaxLines?: string | number;
-  diffMaxBytes?: string | number;
-}
 
 function readFileConfig(): Promise<FileConfig | null> {
   return fetch(chrome.runtime.getURL("config.local.json"))
@@ -53,37 +42,19 @@ function readDirectStorage(): Promise<StoredConfig> {
   });
 }
 
-function applyDefaults(stored: StoredConfig): ResolvedSettings {
-  return {
-    apiEndpoint: stored.apiEndpoint || "",
-    apiKey: stored.apiKey || "",
-    model: stored.model || "",
-    githubToken: stored.githubToken || "",
-    thinkingEffort: stored.thinkingEffort || "default",
-    diffEnabled: stored.diffEnabled !== undefined ? stored.diffEnabled : true,
-    diffMaxLines: stored.diffMaxLines || 3000,
-    diffMaxBytes: stored.diffMaxBytes || 100000,
-  };
-}
-
-function resolveDiffEnabled(stored: ResolvedSettings, fileConfig: FileConfig | null): boolean | string {
-  let result: boolean | string = true;
-  if (fileConfig?.diffEnabled !== undefined) result = fileConfig.diffEnabled;
-  if (stored.diffEnabled !== undefined) result = stored.diffEnabled;
-  return result;
-}
-
-function applyValues(stored: ResolvedSettings, fileConfig: FileConfig | null): void {
-  endpointInput.value = stored.apiEndpoint || fileConfig?.apiEndpoint || "";
-  apiKeyInput.value = stored.apiKey || fileConfig?.apiKey || "";
-  modelInput.value = stored.model || fileConfig?.model || "";
-  githubTokenInput.value = stored.githubToken || fileConfig?.githubToken || "";
-  selectThinkingEffort(toThinkingEffort(stored.thinkingEffort || fileConfig?.thinkingEffort || "default"));
-  const diffEnabled = resolveDiffEnabled(stored, fileConfig);
-  // Legacy saves may hold "true"/"false" STRINGS; Boolean("false") is true.
-  diffEnabledInput.checked = diffEnabled !== false && diffEnabled !== "false";
-  diffMaxLinesInput.value = String(stored.diffMaxLines || fileConfig?.diffMaxLines || 3000);
-  diffMaxBytesInput.value = String(stored.diffMaxBytes || fileConfig?.diffMaxBytes || 100000);
+function applyValues(stored: StoredConfig, fileConfig: FileConfig | null): void {
+  // Same resolver the background runs with — the popup always displays the
+  // effective configuration, including file-wins diff/thinkingEffort values.
+  const config = resolveConfig(stored, fileConfig);
+  endpointInput.value = config.apiEndpoint;
+  apiKeyInput.value = config.apiKey;
+  modelInput.value = config.model;
+  githubTokenInput.value = config.githubToken;
+  selectThinkingEffort(config.thinkingEffort);
+  diffEnabledInput.checked = config.diffEnabled;
+  // Display the same clamped values the background will run with.
+  diffMaxLinesInput.value = String(diffLimitOrDefault("diffMaxLines", config.diffMaxLines));
+  diffMaxBytesInput.value = String(diffLimitOrDefault("diffMaxBytes", config.diffMaxBytes));
   apiKeyInput.placeholder = fileConfig?.apiKey
     ? "(loaded from config.local.json — edit to override)"
     : "(required — saved in extension storage)";
@@ -96,7 +67,6 @@ function applyValues(stored: ResolvedSettings, fileConfig: FileConfig | null): v
 
 export function loadSettings(): void {
   void Promise.all([readDirectStorage(), readFileConfig()]).then(([direct, fileConfig]) => {
-    const stored = applyDefaults(direct);
     // Log presence flags only — never serialize stored config (contains apiKey/githubToken).
     console.log(
       "[PR Generator popup] load: direct keys=" +
@@ -104,8 +74,9 @@ export function loadSettings(): void {
         " file=" +
         (fileConfig ? "present" : "none"),
     );
-    applyValues(stored, fileConfig);
-    validateEndpointDebounced();
-    return stored;
+    applyValues(direct, fileConfig);
+    // No implicit validation here: a key-bearing network call requires an
+    // explicit click. The status stays "Not validated" (popup.html default).
+    return undefined;
   });
 }

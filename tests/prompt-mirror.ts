@@ -8,6 +8,7 @@ import {
   buildSizeTierNote,
   FORMATTING_RULES,
   isLikelyTemplate,
+  wrapUntrustedData,
 } from "../src/background/prompts/common";
 
 const SECTIONS_LINES = [
@@ -45,7 +46,7 @@ function existingContentSection(existingBody: string): string {
     section +=
       "The user has written custom content. Only complete missing parts (Testing section, issue links) — do not restructure or rewrite existing sentences, and preserve the author's wording and brevity:\n\n";
   }
-  return section + existingBody + "\n\n";
+  return section + wrapUntrustedData(existingBody) + "\n";
 }
 
 function combinedRules(): string {

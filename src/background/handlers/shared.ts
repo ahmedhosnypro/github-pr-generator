@@ -1,4 +1,5 @@
 import type { GitHubHunksByFile, GitHubPRDetails } from "../../github-types";
+import { extractLinkedIssues } from "../../linked-issues";
 import type { BranchContext, CommitInfo, ExtensionConfig, FileChange, OpenedPRData, PRStats } from "../../types";
 import { getConfig, validateConfig } from "../config";
 import { fetchGitHubDiff } from "../github/diff";
@@ -84,27 +85,7 @@ export async function gatherPRData(
   return { owner, repo, prNumber, prDetails, commits, fileChanges, branchContext, diffText, hunkRanges };
 }
 
-const ISSUE_PATTERNS = [
-  /(?:fixes|resolves|closes|fix|resolve|close|addresses|address|references|refs|see|related\s+to)\s+#(\d+)/gi,
-  /#([1-9]\d{2,})/g,
-];
-
-export function extractLinkedIssues(commits: CommitInfo[]): string[] {
-  const linkedIssues: string[] = [];
-  for (const commit of commits) {
-    for (const pattern of ISSUE_PATTERNS) {
-      let match = pattern.exec(commit.message);
-      while (match !== null) {
-        const issueNumber = match[1];
-        if (issueNumber !== undefined && !linkedIssues.includes("#" + issueNumber)) {
-          linkedIssues.push("#" + issueNumber);
-        }
-        match = pattern.exec(commit.message);
-      }
-    }
-  }
-  return linkedIssues;
-}
+export { extractLinkedIssues };
 
 export function buildStats(prDetails: GitHubPRDetails, fileChanges: FileChange[]): PRStats {
   return {
@@ -112,6 +93,45 @@ export function buildStats(prDetails: GitHubPRDetails, fileChanges: FileChange[]
     additions: prDetails.additions || 0,
     deletions: prDetails.deletions || 0,
   };
+}
+
+export interface FieldApplyPreparation {
+  config: ExtensionConfig;
+  owner: string;
+  repo: string;
+  prNumber: string;
+  text: string;
+}
+
+/**
+ * Apply-phase prologue for the opened-PR review flow. The payload comes from a
+ * content-script text field the user just edited, so nothing is trusted:
+ * coordinates and text are shape-checked here, and updatePRField validates the
+ * owner/repo/prNumber formats again before the PATCH.
+ */
+export async function prepareFieldApply(
+  label: string,
+  data: { owner?: string; repo?: string; prNumber?: string },
+  fieldName: string,
+  text: string | undefined,
+  tokenRequiredMessage: string,
+): Promise<FieldApplyPreparation> {
+  logMsg(label + " - apply request for " + fieldName + " update");
+  const owner = typeof data.owner === "string" ? data.owner.trim() : "";
+  const repo = typeof data.repo === "string" ? data.repo.trim() : "";
+  const prNumber = typeof data.prNumber === "string" ? data.prNumber.trim() : "";
+  if (!owner || !repo || !prNumber) {
+    throw new Error("Missing PR owner/repo/number for the " + fieldName + " update.");
+  }
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new Error("Cannot apply an empty " + fieldName + " to the PR.");
+  }
+
+  const config = await getValidatedConfig();
+  if (!config.githubToken) {
+    throw new Error(tokenRequiredMessage);
+  }
+  return { config, owner, repo, prNumber, text };
 }
 
 // Shared prologue of the title/description update handlers: log the request,

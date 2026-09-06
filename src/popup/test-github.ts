@@ -1,6 +1,11 @@
 import { githubTokenInput, testGitHubBtn, testGitHubResult } from "./elements";
-import { errorMessage } from "./messaging";
+import { errorMessage, isTimeoutError } from "./messaging";
 import { COLOR_ERROR, COLOR_MUTED, COLOR_OK } from "./ui";
+
+const TEST_GITHUB_TIMEOUT_MS = 10_000;
+
+// Result text changes must be announced; popup.html has no live regions.
+testGitHubResult.setAttribute("aria-live", "polite");
 
 interface GitHubTestResult {
   ok: boolean;
@@ -41,7 +46,9 @@ function showGitHubResult(result: GitHubTestResult): void {
 function showGitHubError(err: unknown): void {
   testGitHubBtn.disabled = false;
   testGitHubBtn.textContent = "Test GitHub";
-  testGitHubResult.textContent = "Error: " + errorMessage(err);
+  testGitHubResult.textContent = isTimeoutError(err)
+    ? "Timed out after " + String(TEST_GITHUB_TIMEOUT_MS / 1000) + "s — no response from GitHub"
+    : "Error: " + errorMessage(err);
   testGitHubResult.style.color = COLOR_ERROR;
 }
 
@@ -64,6 +71,7 @@ export function testGitHub(): void {
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "github-pr-generator-extension",
     },
+    signal: AbortSignal.timeout(TEST_GITHUB_TIMEOUT_MS),
   })
     .then(readGitHubResponse)
     .then(showGitHubResult)

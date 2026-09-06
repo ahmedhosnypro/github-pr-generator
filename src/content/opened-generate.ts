@@ -1,7 +1,19 @@
-import type { GenerateDescriptionResponse, GenerateTitleResponse } from "../responses";
+import type {
+  ApplyDescriptionResponse,
+  ApplyTitleResponse,
+  GenerateDescriptionResponse,
+  GenerateTitleResponse,
+} from "../responses";
 import type { TitleGenerationMode } from "../types";
 import { BTN_OPENED_DESC_ID, BTN_OPENED_TITLE_ID } from "./constants";
-import { clearButtonLoading, getButton, setButtonLoading, showToast } from "./dom";
+import {
+  clearButtonLoading,
+  getButton,
+  type ReviewControls,
+  setButtonLoading,
+  showReviewModal,
+  showToast,
+} from "./dom";
 import { errorMessage, errorStack } from "./errors";
 import { extractBranchContext } from "./extract-context";
 import { log } from "./log";
@@ -37,7 +49,7 @@ async function generateOpenedTitle(mode: TitleGenerationMode): Promise<void> {
       showToast("Could not determine PR owner/repo/number from URL.", true);
       return;
     }
-    log("info", "handleGenerateOpenedTitle (" + mode + ") - " + JSON.stringify(ctx));
+    log("info", "handleGenerateOpenedTitle (" + mode + ") - PR context resolved, generating proposal");
     const response = await sendToBackground<GenerateTitleResponse>({
       type: "generateTitle",
       data: {
@@ -54,17 +66,48 @@ async function generateOpenedTitle(mode: TitleGenerationMode): Promise<void> {
       showToast("Error: " + response.error, true);
       return;
     }
-    if (response.updated) {
-      log(
-        "info",
-        "Title updated - mode: " + mode + " | old title: " + existingTitle + " | new title: " + response.title,
-      );
-      showToast("PR title updated via GitHub API!");
-    } else {
-      showToast("Title generated but update status unknown.");
+    if (!response.title) {
+      showToast("The model returned an empty title proposal.", true);
+      return;
     }
+    showReviewModal({
+      heading: "Review proposed PR title",
+      value: response.title,
+      onApply: (value, controls) => {
+        void applyTitle(ctx.owner, ctx.repo, ctx.prNumber, value, controls);
+      },
+      onCancel: () => {
+        showToast("Update cancelled — the PR was not changed.");
+      },
+    });
   } catch (err) {
     reportOpenedError("handleGenerateOpenedTitle", err);
+  }
+}
+
+async function applyTitle(
+  owner: string,
+  repo: string,
+  prNumber: string,
+  title: string,
+  controls: ReviewControls,
+): Promise<void> {
+  try {
+    const response = await sendToBackground<ApplyTitleResponse>({
+      type: "applyTitleUpdate",
+      data: { owner, repo, prNumber, title },
+    });
+    if ("error" in response) {
+      log("error", "Error from background (applyTitleUpdate): " + response.error);
+      showToast("Error: " + response.error, true);
+      controls.setBusy(false);
+      return;
+    }
+    controls.close();
+    showToast("PR title updated via GitHub API!");
+  } catch (err) {
+    reportOpenedError("applyTitleUpdate", err);
+    controls.setBusy(false);
   }
 }
 
@@ -94,7 +137,7 @@ async function generateOpenedDescription(): Promise<void> {
       showToast("Could not determine PR owner/repo/number from URL.", true);
       return;
     }
-    log("info", "handleGenerateOpenedDescription - " + JSON.stringify(ctx));
+    log("info", "handleGenerateOpenedDescription - PR context resolved, generating proposal");
     const response = await sendToBackground<GenerateDescriptionResponse>({
       type: "generateDescription",
       data: {
@@ -111,13 +154,49 @@ async function generateOpenedDescription(): Promise<void> {
       showToast("Error: " + response.error, true);
       return;
     }
-    if (response.updated) {
-      showToast("PR description updated via GitHub API!");
-    } else {
-      showToast("Description generated but update status unknown.");
+    if (!response.body) {
+      showToast("The model returned an empty description proposal.", true);
+      return;
     }
+    showReviewModal({
+      heading: "Review proposed PR description",
+      value: response.body,
+      multiline: true,
+      onApply: (value, controls) => {
+        void applyDescription(ctx.owner, ctx.repo, ctx.prNumber, value, controls);
+      },
+      onCancel: () => {
+        showToast("Update cancelled — the PR was not changed.");
+      },
+    });
   } catch (err) {
     reportOpenedError("handleGenerateOpenedDescription", err);
+  }
+}
+
+async function applyDescription(
+  owner: string,
+  repo: string,
+  prNumber: string,
+  body: string,
+  controls: ReviewControls,
+): Promise<void> {
+  try {
+    const response = await sendToBackground<ApplyDescriptionResponse>({
+      type: "applyDescriptionUpdate",
+      data: { owner, repo, prNumber, body },
+    });
+    if ("error" in response) {
+      log("error", "Error from background (applyDescriptionUpdate): " + response.error);
+      showToast("Error: " + response.error, true);
+      controls.setBusy(false);
+      return;
+    }
+    controls.close();
+    showToast("PR description updated via GitHub API!");
+  } catch (err) {
+    reportOpenedError("applyDescriptionUpdate", err);
+    controls.setBusy(false);
   }
 }
 

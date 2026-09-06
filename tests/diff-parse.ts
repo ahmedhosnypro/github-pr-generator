@@ -1,4 +1,5 @@
 import { parseHunkLineRanges, truncateDiff } from "../src/background/github/diff-parse";
+import { resolveDiffLinks } from "../src/background/linkify";
 import { expectExcludes, expectIncludes, expectMatch, getFailures } from "./expect-helpers";
 
 console.log("=== Diff Hunk Parsing Tests ===\n");
@@ -178,6 +179,69 @@ const quotedPlusDiff = [
 const quotedPlusResult = parseHunkLineRanges(quotedPlusDiff);
 expectMatch("quoted +++ fallback: file detected", quotedPlusResult["quoted name.txt"]?.length, 1);
 expectMatch("quoted +++ fallback: right start", quotedPlusResult["quoted name.txt"]?.[0]?.rightStart, 4);
+
+// Named C escapes (\t, \n, ...) must decode to the control character, not the
+// literal letter, so the hunk key matches the REST API's real path. Backslash
+// doubled in the fixture so the diff text carries a literal \t escape.
+const namedEscapeDiff = [
+  'diff --git "a/dir/file\\tname.txt" "b/dir/file\\tname.txt"',
+  "index 111..222 100644",
+  '--- "a/dir/file\\tname.txt"',
+  '+++ "b/dir/file\\tname.txt"',
+  "@@ -1,1 +1,2 @@",
+  "+added",
+].join("\n");
+const namedEscapeResult = parseHunkLineRanges(namedEscapeDiff);
+expectMatch("named escape: tab decoded", namedEscapeResult["dir/file\tname.txt"]?.length, 1);
+expectMatch("named escape: no literal 't' key", "dir/filetname.txt" in namedEscapeResult, false);
+
+// Pure-deletion hunks report a zero right count with the start at the line
+// preceding the deletion; the emitted range must anchor that line and never
+// invert (start > end), which would linkify to a broken GitHub URL.
+const deletionDiff = [
+  "diff --git a/src/del.ts b/src/del.ts",
+  "--- a/src/del.ts",
+  "+++ b/src/del.ts",
+  "@@ -9,3 +8,0 @@",
+  "-gone one",
+  "-gone two",
+  "-gone three",
+].join("\n");
+const deletionHunk = parseHunkLineRanges(deletionDiff)["src/del.ts"]?.[0];
+expectMatch("pure deletion: starts at preceding line", deletionHunk?.rightStart, 8);
+expectMatch("pure deletion: count clamped to one line", deletionHunk?.rightCount, 1);
+expectMatch(
+  "pure deletion: range not inverted",
+  (deletionHunk?.rightStart ?? 0) + (deletionHunk?.rightCount ?? 0) - 1 >= (deletionHunk?.rightStart ?? 1),
+  true,
+);
+
+// The full chain: parse a pure-deletion hunk, format the marker the way
+// summary-anchors does, and confirm linkify emits a valid GitHub URL.
+const deletionEnd = (deletionHunk?.rightStart ?? 0) + (deletionHunk?.rightCount ?? 0) - 1;
+const deletionAnchor = "a".repeat(64);
+const deletionMarker = `[[1]](diffhunk://#diff-${deletionAnchor}_L${String(deletionHunk?.rightStart)}-R${String(deletionEnd)})`;
+const deletionLink = resolveDiffLinks(deletionMarker, { owner: "o", repo: "r", kind: "pull", prNumber: "7" });
+expectIncludes(
+  "pure deletion: linkified URL is valid",
+  deletionLink,
+  `https://github.com/o/r/pull/7/files#diff-${deletionAnchor}R8-R8`,
+);
+
+// Pure-addition hunks have a zero left count; the right side is intact and
+// must stay unchanged.
+const additionDiff = [
+  "diff --git a/src/add.ts b/src/add.ts",
+  "--- a/src/add.ts",
+  "+++ b/src/add.ts",
+  "@@ -8,0 +9,3 @@",
+  "+new one",
+  "+new two",
+  "+new three",
+].join("\n");
+const additionHunk = parseHunkLineRanges(additionDiff)["src/add.ts"]?.[0];
+expectMatch("pure addition: right start", additionHunk?.rightStart, 9);
+expectMatch("pure addition: right count", additionHunk?.rightCount, 3);
 
 const failures = getFailures();
 if (failures > 0) {

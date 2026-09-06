@@ -6,6 +6,7 @@ import {
   buildScreenshotsHint,
   buildSizeTierNote,
   buildTemplateFillBlock,
+  enforcePromptBudget,
   FORMATTING_RULES,
   INTENT_TITLES_RULE,
   NO_BOT_SIGNATURES_RULE,
@@ -15,15 +16,13 @@ import {
   TITLE_STYLE_GUIDANCE,
 } from "./common";
 
-// Hard ceiling on the assembled prompt: at ~4 chars/token this keeps the
-// request near 30k tokens, leaving completion headroom in the model's
-// context window. The per-field caps (commits, changed files, anchors, diff,
-// template) bound each field but not their sum, which is what this ceiling
-// enforces.
-export const MAX_PROMPT_CHARS = 120_000;
+// Re-exported so existing importers (e.g. prompt tests) keep their path.
+export { MAX_PROMPT_CHARS } from "./common";
 
 function assemble(changesSummary: string, existingBody: string, style?: RepoStyle): string {
   let prompt = "Generate a GitHub pull request title and description for the following changes.\n\n";
+  // changesSummary is already fenced as <untrusted_pr_data> by
+  // buildChangesSummary — everything in it is third-party data, not commands.
   prompt += changesSummary + "\n";
 
   const hasBody = existingBody.trim().length > 0;
@@ -56,27 +55,7 @@ function assemble(changesSummary: string, existingBody: string, style?: RepoStyl
 }
 
 export function buildCombinedPrompt(changesSummary: string, existingBody: string, style?: RepoStyle): string {
-  let prompt = assemble(changesSummary, existingBody, style);
-  if (prompt.length <= MAX_PROMPT_CHARS) {
-    return prompt;
-  }
-  const trimmedSummary = truncateToBudget(changesSummary, changesSummary.length - (prompt.length - MAX_PROMPT_CHARS));
-  prompt = assemble(trimmedSummary, existingBody, style);
-  if (prompt.length <= MAX_PROMPT_CHARS) {
-    return prompt;
-  }
-  const trimmedBody = truncateToBudget(existingBody, existingBody.length - (prompt.length - MAX_PROMPT_CHARS));
-  return assemble(trimmedSummary, trimmedBody, style);
-}
-
-// Truncation applies only to changesSummary and existingBody — the
-// OUTPUT FORMAT/RULES tail is never touched. Cut at a newline boundary so
-// the model gets whole lines, then mark the removal so it does not assume
-// the input was complete.
-function truncateToBudget(text: string, keep: number): string {
-  const cut = text.lastIndexOf("\n", Math.max(keep - 1, 0));
-  const prefix = cut > 0 ? text.slice(0, cut) : text.slice(0, Math.max(keep, 0));
-  return prefix + "\n... (truncated: prompt budget reached — remaining input omitted)\n";
+  return enforcePromptBudget((summary, body) => assemble(summary, body, style), changesSummary, existingBody);
 }
 
 function combinedRules(): string {

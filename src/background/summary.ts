@@ -1,6 +1,8 @@
 import type { GitHubHunksByFile } from "../github-types";
 import type { BranchContext, CommitInfo, FileChange, FileChangeType, GenerateData, PRStats } from "../types";
-import { buildAnchorsSection } from "./summary-anchors";
+import { MAX_LISTED_COMMITS } from "./commit-coverage";
+import { wrapUntrustedData } from "./prompts/common";
+import { buildAnchorsSection, MAX_ANCHOR_FILES } from "./summary-anchors";
 
 function buildRepoSection(branchContext: BranchContext | null | undefined): string {
   if (!branchContext || !(branchContext.owner || branchContext.baseBranch || branchContext.headBranch)) {
@@ -25,11 +27,8 @@ function changeIndicator(type: FileChangeType): string {
   return "[m]";
 }
 
-// Cap the commits list: a release PR can carry hundreds of commits, and past
-// this point the prompt gains nothing from more bullets while the coverage
-// mandate becomes unreachable. The remainder is folded into a note for
-// thematic coverage.
-const MAX_LISTED_COMMITS = 150;
+// The commits list cap itself lives in commit-coverage.ts so the generation
+// prompt and the coverage scorer can never disagree on the commit universe.
 
 // Cap the changed-files list: a monorepo PR can carry thousands of entries,
 // and the uncapped bullet list is what pushes the assembled prompt toward
@@ -50,17 +49,26 @@ function sanitizeCommitMessage(message: string): string {
   return cleaned.slice(0, MAX_COMMIT_MESSAGE_LENGTH - 3) + "...";
 }
 
+// Capped, sanitized commit bullets shared by the generation prompt and the
+// refinement iteration prompt — both must show the model exactly the commit
+// set the coverage scorer judges.
+export function buildCommitListText(messages: string[]): string {
+  const listed = messages.slice(0, MAX_LISTED_COMMITS);
+  let text = "";
+  for (const message of listed) {
+    text += "- " + sanitizeCommitMessage(message) + "\n";
+  }
+  if (messages.length > listed.length) {
+    const rest = messages.length - listed.length;
+    text += `(+${String(rest)} more commits, not listed — cover them thematically rather than itemizing)\n`;
+  }
+  return text;
+}
+
 function buildCommitsSection(commits: CommitInfo[] | undefined): string {
   let section = "## Commits\n\n";
   if (commits && commits.length > 0) {
-    const listed = commits.slice(0, MAX_LISTED_COMMITS);
-    for (const commit of listed) {
-      section += "- " + sanitizeCommitMessage(commit.message) + "\n";
-    }
-    if (commits.length > listed.length) {
-      const rest = commits.length - listed.length;
-      section += `(+${String(rest)} more commits, not listed — cover them thematically rather than itemizing)\n`;
-    }
+    section += buildCommitListText(commits.map((c) => c.message));
   } else {
     section += "(No commit information available)\n";
   }
@@ -106,6 +114,28 @@ export function hasUsableAnchors(fileChanges: FileChange[] | undefined, hunkRang
   return !!fileChanges?.some((fc) => fc.diffAnchor.length > 5);
 }
 
+// Number of distinct files the prompt can offer diff anchors for: a file
+// counts if it carries a usable diffAnchor or appears in the hunk ranges. The
+// refinement anchor check scales its demand to this supply, so it must share
+// the summary builder's cap (mirroring MAX_LISTED_COMMITS in commit-coverage.ts).
+export function countUsableAnchors(
+  fileChanges: FileChange[] | undefined,
+  hunkRanges: GitHubHunksByFile | null,
+): number {
+  const files = new Set<string>();
+  if (fileChanges) {
+    for (const fc of fileChanges) {
+      if (fc.diffAnchor.length > 5) files.add(fc.path);
+    }
+  }
+  if (hunkRanges) {
+    for (const filePath of Object.keys(hunkRanges)) {
+      files.add(filePath);
+    }
+  }
+  return Math.min(files.size, MAX_ANCHOR_FILES);
+}
+
 export function buildChangesSummary(
   data: GenerateData,
   diffText: string | null,
@@ -140,5 +170,9 @@ export function buildChangesSummary(
     summary += buildStatsSection(data.stats);
   }
 
-  return summary;
+  // Every section above carries third-party, attacker-controllable content
+  // (branch names, commit messages, diff bodies, file paths). The untrusted
+  // fence marks the whole summary as data for the model; the prompt builders
+  // embed it as-is, so this is the single labeling point that covers them all.
+  return wrapUntrustedData(summary);
 }

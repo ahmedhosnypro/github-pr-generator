@@ -9,6 +9,7 @@ const CONFIG_FILE = join(ROOT_DIR, "config.local.json");
 
 const RUNS_TO_ANALYZE = 5;
 const MAX_HISTORY = 50;
+const MAX_IMPROVEMENTS = 100;
 const SPIKE_THRESHOLD_MS = 2000;
 
 interface EndpointResult {
@@ -74,6 +75,18 @@ function loadConfig(): LocalConfig {
     return JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as LocalConfig;
   } catch {
     return {};
+  }
+}
+
+// FIFO-evicts the oldest entries (insertion order) so the improvements map in
+// the state file stays bounded across long-running loops.
+export function pruneImprovements(improvements: Record<string, string>, max = MAX_IMPROVEMENTS): void {
+  const keys = Object.keys(improvements);
+  const excess = keys.length - max;
+  if (excess <= 0) return;
+  for (const key of keys.slice(0, excess)) {
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete improvements[key];
   }
 }
 
@@ -148,6 +161,7 @@ async function runCycle(): Promise<EndpointResult[]> {
         `Latencies spiked to ${Math.round(avgLatency)}ms — optimization needed`;
     }
   }
+  pruneImprovements(state.improvements);
 
   state.last_updated = new Date().toISOString();
   saveState(state);
