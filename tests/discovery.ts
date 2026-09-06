@@ -1,5 +1,5 @@
 // Unit tests for discoverRepoStyle (background/github/discovery.ts): the
-// chrome.storage.session cache (hit / TTL expiry / no-caching of empty
+// chrome.storage.session cache (hit / TTL expiry / short-TTL caching of empty
 // results) and the PR-template discovery priority. Mocks global fetch and
 // chrome.storage.session — no real network, no real extension APIs.
 import { discoverRepoStyle } from "../src/background/github/discovery";
@@ -96,13 +96,14 @@ function jsonResponse(payload: unknown): Response {
 }
 
 const SEVEN_HOURS_MS = 7 * 60 * 60 * 1000;
+const TWENTY_MINUTES_MS = 20 * 60 * 1000;
 
 function cacheKey(owner: string, repo: string): string {
   return `repoStyle:${owner.toLowerCase()}/${repo.toLowerCase()}`;
 }
 
 function pullsUrl(owner: string, repo: string): string {
-  return `https://api.github.com/repos/${owner}/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`;
+  return `https://api.github.com/repos/${owner}/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`;
 }
 
 function dirUrl(owner: string, repo: string, dir: string): string {
@@ -171,19 +172,46 @@ async function testTtlExpiry(): Promise<void> {
   );
 }
 
-// (3) Empty results are NOT cached: every fetch 404s (no template, no PR
-// list) → EMPTY_REPO_STYLE comes back and storage.set is never called.
-async function testEmptyNotCached(): Promise<void> {
+// (3) Empty results ARE cached: every fetch 404s (no template, no PR list) →
+// an empty style comes back AND is written to storage (short TTL), so a
+// discovery loop does not hammer GitHub for a repo that has nothing. A fresh
+// empty entry is honored (no fetch); an entry older than the 15-minute empty
+// TTL is thrown away, re-fetched, and re-cached.
+async function testEmptyCacheTtl(): Promise<void> {
+  // discoverRepoStyle returns a fresh inferred object when uncached (not the
+  // EMPTY_REPO_STYLE singleton), so compare structurally.
+  const emptyJson = JSON.stringify(EMPTY_REPO_STYLE);
   const store = freshStore();
   installChrome(store);
   const spy: FetchSpy = { urls: [] };
   await withFetch(urlFetch({}, spy), async () => {
     const style = await discoverRepoStyle(BASE_CONFIG, "octo", "nothing-here");
-    // discoverRepoStyle returns a fresh inferred object here (not the
-    // EMPTY_REPO_STYLE singleton), so compare structurally.
-    expectMatch("all-404 run returns an empty style", JSON.stringify(style), JSON.stringify(EMPTY_REPO_STYLE));
-    expectMatch("empty result is never written to cache", store.setCalls.length, 0);
+    expectMatch("all-404 run returns an empty style", JSON.stringify(style), emptyJson);
+    expectMatch("empty result is written to cache once", store.setCalls.length, 1);
     expectMatch("fetch was still attempted for templates and PRs", spy.urls.length > 0, true);
+  });
+
+  const freshStore2 = freshStore();
+  freshStore2.data.set(cacheKey("octo", "still-empty"), { at: Date.now(), style: EMPTY_REPO_STYLE });
+  installChrome(freshStore2);
+  const freshSpr: FetchSpy = { urls: [] };
+  await withFetch(urlFetch({}, freshSpr), async () => {
+    const style = await discoverRepoStyle(BASE_CONFIG, "octo", "still-empty");
+    expectMatch("fresh empty entry returned from cache", style === EMPTY_REPO_STYLE, true);
+    expectMatch("fresh empty entry makes no fetch calls", freshSpr.urls.length, 0);
+  });
+
+  const staleStore = freshStore();
+  staleStore.data.set(cacheKey("octo", "retry-me"), { at: Date.now() - TWENTY_MINUTES_MS, style: EMPTY_REPO_STYLE });
+  installChrome(staleStore);
+  const staleSpy: FetchSpy = { urls: [] };
+  await withFetch(urlFetch({}, staleSpy), async () => {
+    const style = await discoverRepoStyle(BASE_CONFIG, "octo", "retry-me");
+    expectMatch("stale empty entry triggers a refetch", staleSpy.urls.length > 0, true);
+    expectMatch("stale empty entry refetches to an empty style", JSON.stringify(style), emptyJson);
+    const written = staleStore.data.get(cacheKey("octo", "retry-me")) as { at: number } | undefined;
+    const fresh = (written?.at ?? 0) > Date.now() - TWENTY_MINUTES_MS;
+    expectMatch("re-fetched empty entry is re-cached fresh", fresh, true);
   });
 }
 
@@ -279,7 +307,7 @@ async function testOversizedTemplateSkipped(): Promise<void> {
       ),
       true,
     );
-    expectMatch("empty result is never written to cache", store.setCalls.length, 0);
+    expectMatch("empty (template-skipped) result is cached once", store.setCalls.length, 1);
   });
 }
 
@@ -317,7 +345,7 @@ async function main(): Promise<void> {
   console.log("=== Discovery Cache Tests ===\n");
   await testCacheHit();
   await testTtlExpiry();
-  await testEmptyNotCached();
+  await testEmptyCacheTtl();
   await testNonEmptyCached();
   await testInvalidNames();
   await testTemplatePriority();

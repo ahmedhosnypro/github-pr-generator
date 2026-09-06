@@ -10,14 +10,20 @@ import { errorMessage, logMsg } from "../log";
 import {
   fetchWithTimeout,
   isValidPrNumber,
+  isValidRepoName,
   makeGitHubHeaders,
-  rateLimitOrForbidden,
+  rateLimitOrApiError,
   rateLimitRemaining,
 } from "./common";
 
 interface PageListResult<T> {
   items: T[];
 }
+
+// GitHub caps the PR files listing at 3000 entries and commits at 250, so 10
+// pages × 100 covers every real response. The bound also keeps a pathological
+// server (always-full pages) from looping forever.
+const MAX_PAGES = 10;
 
 async function fetchPage(
   headers: Record<string, string>,
@@ -40,7 +46,7 @@ async function fetchPage(
       rateLimitRemaining(response),
   );
   if (!response.ok) {
-    const blocked = rateLimitOrForbidden(response);
+    const blocked = rateLimitOrApiError(response);
     if (blocked) return blocked;
     const errText = await response.text();
     logMsg(
@@ -83,7 +89,7 @@ async function fetchAllPages<TMapped>(
     const perPage = 100; // Max per page for GitHub API
     let hasMore = true;
 
-    while (hasMore) {
+    while (hasMore && page <= MAX_PAGES) {
       // oxlint-disable-next-line no-await-in-loop -- each GitHub page depends on the previous response; pagination must stay sequential
       const pageResult = await fetchPage(headers, baseUrl, label, page, perPage);
       if (!Array.isArray(pageResult)) return pageResult;
@@ -105,6 +111,10 @@ async function fetchAllPages<TMapped>(
       }
     }
 
+    if (hasMore && page > MAX_PAGES) {
+      logMsg(label + " pagination stopped at the " + String(MAX_PAGES) + "-page cap (truncated results)");
+    }
+
     logMsg("Total " + label + " fetched across all pages: " + String(allItems.length));
     return { items: allItems };
   } catch (fetchErr) {
@@ -124,6 +134,10 @@ export async function fetchPRCommits(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRCommitsResult> {
+  if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
+    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
   if (!isValidPrNumber(prNumber)) {
     logMsg("Invalid PR number: " + prNumber);
     return { error: "GITHUB_INVALID_CONTEXT" };
@@ -157,6 +171,10 @@ export async function fetchPRFiles(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRFilesResult> {
+  if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
+    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
+    return { error: "GITHUB_INVALID_CONTEXT" };
+  }
   if (!isValidPrNumber(prNumber)) {
     logMsg("Invalid PR number: " + prNumber);
     return { error: "GITHUB_INVALID_CONTEXT" };

@@ -16,7 +16,7 @@ import {
   isValidRepoName,
   makeGitHubHeaders,
   rateLimitedResult,
-  rateLimitOrForbidden,
+  rateLimitOrApiError,
   rateLimitRemaining,
 } from "./common";
 
@@ -24,7 +24,20 @@ function prUrl(owner: string, repo: string, prNumber: string): string {
   return "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
 }
 
-function mapPRDetails(prData: GitHubPRApiResponse): GitHubPRDetails {
+// head.label arrives as "owner:branch". The owner segment is the base repo's
+// owner for same-repo PRs, so fold the label back to the plain ref; a PR from
+// a fork keeps its "owner:branch" label because that branch lives elsewhere.
+function headBranchLabel(prData: GitHubPRApiResponse, owner: string, repo: string): string {
+  const head = prData.head;
+  if (!head) return "";
+  const headRepo = head.repo?.full_name?.toLowerCase() ?? "";
+  if (headRepo === `${owner.toLowerCase()}/${repo.toLowerCase()}`) {
+    return head.ref ?? head.label ?? "";
+  }
+  return head.label && head.label !== "" ? head.label : (head.ref ?? "");
+}
+
+function mapPRDetails(prData: GitHubPRApiResponse, owner: string, repo: string): GitHubPRDetails {
   logMsg(
     "Fetched PR details - title: " +
       String(prData.title) +
@@ -43,7 +56,7 @@ function mapPRDetails(prData: GitHubPRApiResponse): GitHubPRDetails {
     title: prData.title || "",
     body: prData.body || "",
     baseBranch: prData.base?.ref ? prData.base.ref : "",
-    headBranch: prData.head?.label ? prData.head.label : (prData.head?.ref ?? ""),
+    headBranch: headBranchLabel(prData, owner, repo),
     additions: prData.additions || 0,
     deletions: prData.deletions || 0,
     changedFiles: prData.changed_files || 0,
@@ -78,14 +91,14 @@ export async function fetchPRDetails(
         rateLimitRemaining(response),
     );
     if (!response.ok) {
-      const blocked = rateLimitOrForbidden(response);
+      const blocked = rateLimitOrApiError(response);
       if (blocked) return blocked;
       const errText = await response.text();
       logMsg("GitHub API error fetching PR details: " + String(response.status) + " - " + errText.substring(0, 200));
       return { error: "GITHUB_API_ERROR", status: response.status };
     }
     const prData = (await response.json()) as GitHubPRApiResponse;
-    return mapPRDetails(prData);
+    return mapPRDetails(prData, owner, repo);
   } catch (fetchErr) {
     logMsg("GitHub API fetch error (PR details): " + errorMessage(fetchErr));
     return { error: "GITHUB_NETWORK_ERROR", message: errorMessage(fetchErr) };

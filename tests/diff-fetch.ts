@@ -137,17 +137,23 @@ async function testRateLimited403(): Promise<void> {
   );
 }
 
-// (6) 403 with quota remaining → GITHUB_FORBIDDEN (SSO/permissions), even at
-// 429's sibling status the header alone decides. No header → also FORBIDDEN.
+// (6) 403 with quota remaining → GITHUB_API_ERROR with detail (the shared
+// mapping treats only an exhausted quota as GITHUB_RATE_LIMITED). No header
+// → also GITHUB_API_ERROR.
 async function testForbidden403(): Promise<void> {
   await withFetch(
     () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "42" } })),
     async () => {
       const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
       expectMatch(
-        "403 with remaining 42 maps to GITHUB_FORBIDDEN",
+        "403 with remaining 42 maps to GITHUB_API_ERROR",
         out !== null && "error" in out && out.error,
-        "GITHUB_FORBIDDEN",
+        "GITHUB_API_ERROR",
+      );
+      expectMatch(
+        "403 with remaining 42 carries status and message",
+        out !== null && "error" in out && out.status === 403 && typeof out.message === "string",
+        true,
       );
     },
   );
@@ -156,9 +162,9 @@ async function testForbidden403(): Promise<void> {
     async () => {
       const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
       expectMatch(
-        "403 without rate-limit header maps to GITHUB_FORBIDDEN",
+        "403 without rate-limit header maps to GITHUB_API_ERROR",
         out !== null && "error" in out && out.error,
-        "GITHUB_FORBIDDEN",
+        "GITHUB_API_ERROR",
       );
     },
   );

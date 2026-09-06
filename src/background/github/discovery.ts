@@ -14,10 +14,14 @@ const TEMPLATE_DIRS = [".github", "docs", ""];
 const TEMPLATE_FILE = /^pull_request_template\.\w+$/i;
 const TEMPLATE_DIR = /^pull_request_template$/i;
 const MAX_TEMPLATE_CHARS = 12_000;
-const RECENT_PRS_PER_PAGE = 30;
+const RECENT_PRS_PER_PAGE = 100;
 const MAX_SAMPLES = 12;
 const MAX_SAMPLE_BODY_CHARS = 1500;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// Empty styles get re-checked quickly: they usually mean a transient failure
+// (no token yet, transient error), but a few spare requests beat the old
+// behavior of never caching them at all.
+const EMPTY_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const CACHE_PREFIX = "repoStyle:";
 
 // Bot logins in the GitHub API always carry the "[bot]" suffix (e.g.
@@ -29,7 +33,9 @@ async function readCache(key: string): Promise<RepoStyle | null> {
   try {
     const record = await chrome.storage.session.get(key);
     const entry = record[key] as { at: number; style: RepoStyle } | undefined;
-    if (entry && Date.now() - entry.at < CACHE_TTL_MS) return entry.style;
+    if (!entry) return null;
+    const ttl = isEmptyStyle(entry.style) ? EMPTY_CACHE_TTL_MS : CACHE_TTL_MS;
+    if (Date.now() - entry.at < ttl) return entry.style;
   } catch {
     // cache miss / storage unavailable — proceed uncached
   }
@@ -91,6 +97,7 @@ async function listDir(
 ): Promise<GitHubContentsEntry[] | null> {
   const url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents" + (dir === "" ? "" : "/" + dir);
   const response = await fetchWithTimeout(url, { method: "GET", headers: makeGitHubHeaders(config) });
+  logMsg("Repo contents listing " + (dir === "" ? "(root)" : dir) + " -> " + String(response.status));
   if (!response.ok) return null;
   const entries = (await response.json()) as GitHubContentsEntry[] | { message?: string };
   return Array.isArray(entries) ? entries : null;
@@ -189,10 +196,10 @@ export async function discoverRepoStyle(config: ExtensionConfig, owner: string, 
       fetchRecentMergedPrs(config, owner, repo),
     ]);
     const style = inferRepoStyle(template, samples);
-    // Don't cache an empty result: it usually means a transient failure
-    // (e.g. no token yet), and caching it would poison the session for
-    // CACHE_TTL_MS even after the problem (e.g. missing PAT) is fixed.
-    if (!isEmptyStyle(style)) await writeCache(cacheKey, style);
+    await writeCache(cacheKey, style);
+    if (isEmptyStyle(style)) {
+      logMsg("Repo style empty (template + samples all missing) - cached for the short empty TTL");
+    }
     return style;
   } catch (error) {
     logMsg("Repo style discovery failed: " + errorMessage(error));

@@ -137,7 +137,7 @@ const NOISE_FILE_PATTERNS: RegExp[] = [
   /\.snap$/,
 ];
 
-function isNoiseFile(path: string): boolean {
+export function isNoiseFile(path: string): boolean {
   return NOISE_FILE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
