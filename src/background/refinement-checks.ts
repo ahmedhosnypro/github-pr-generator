@@ -181,6 +181,17 @@ function checkFences(description: string, stats: PRStats | null): CheckResult | 
 // Prose lines (paragraphs) ≤400 chars; bullets get 600 (long identifiers live
 // there); fenced commands/logs are exempt entirely — a long URL or command must
 // not count as a "prose wall".
+//
+// Length is measured on the RENDERED markdown, not the raw source: link
+// payloads like [[7]](diffhunk://#diff-<sha>_L10-R20) render as a handful of
+// visible characters, so raw-source counting fails bullets that read fine in
+// the PR body (observed: a 639-char raw line rendering as 184 chars — the
+// refinement loop burned every iteration shortening it and deleted coverage
+// words like "prototype" in the process, for a wall that does not exist).
+export function renderedLineLength(line: string): number {
+  return line.replace(/\]\([^)]*\)/g, "]").length;
+}
+
 function proseMetrics(description: string): { maxProse: number; maxBullet: number } {
   let inFence = false;
   let maxProse = 0;
@@ -192,9 +203,9 @@ function proseMetrics(description: string): { maxProse: number; maxBullet: numbe
     }
     if (inFence) continue;
     if (/^[-*]\s/.test(line) || line.startsWith("|")) {
-      maxBullet = Math.max(maxBullet, line.length);
+      maxBullet = Math.max(maxBullet, renderedLineLength(line));
     } else {
-      maxProse = Math.max(maxProse, line.length);
+      maxProse = Math.max(maxProse, renderedLineLength(line));
     }
   }
   return { maxProse, maxBullet };

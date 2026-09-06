@@ -208,6 +208,21 @@ async function testCommitCoverage(): Promise<void> {
   );
   expectMatch("short words (<4 chars) do not count", countCoveredCommits(["fix a bug"], "a bug"), 0);
   expectMatch(
+    "headline punctuation tokenizes (brackets/hyphens/colons split)",
+    countCoveredCommits(["docs(dev1-006): add prototype assets and catalog"], "adds `prototype assets` docs"),
+    1,
+  );
+  expectMatch(
+    "plural headline stem covered by derived form in text",
+    countCoveredCommits(["plans"], "Adds sprint planning artifacts."),
+    1,
+  );
+  expectMatch(
+    "stemming is not a fake-cover for unrelated text",
+    countCoveredCommits(["plans"], "discusses authentication flow only"),
+    0,
+  );
+  expectMatch(
     "word-less headline falls back to full-headline match",
     countCoveredCommits(["a b c"], "mentions a b c verbatim"),
     1,

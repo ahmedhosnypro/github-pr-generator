@@ -3,6 +3,7 @@
 // (analysis/pull-requests/PRESENTATION.md) or the sirajLMS/siraj#119 incident.
 import { countCoveredCommits, coverageThreshold, listedCommits } from "../src/background/commit-coverage";
 import { countDiffAnchors } from "../src/background/parse";
+import { renderedLineLength } from "../src/background/refinement-checks";
 
 export interface RubricCheck {
   name: string;
@@ -158,10 +159,12 @@ function checkLineLengths(description: string): RubricCheck {
       continue;
     }
     if (inFence) continue;
+    // Rendered length, not raw markdown: link URL payloads (e.g. the ~110-char
+    // diffhunk targets) are invisible in the PR body — see renderedLineLength.
     if (/^[-*]\s/.test(line) || line.startsWith("|")) {
-      maxBullet = Math.max(maxBullet, line.length);
+      maxBullet = Math.max(maxBullet, renderedLineLength(line));
     } else {
-      maxProse = Math.max(maxProse, line.length);
+      maxProse = Math.max(maxProse, renderedLineLength(line));
     }
   }
   // Prose walls live in paragraphs (≤400); bullets carry identifiers (≤600);

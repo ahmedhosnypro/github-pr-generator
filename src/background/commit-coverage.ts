@@ -14,16 +14,33 @@ export function listedCommits(commitMessages: string[]): string[] {
 }
 //
 // Semantics: a commit is covered when any >3-char word of its HEADLINE (first
-// line) appears verbatim (case-insensitively) in the description text.
+// line) appears in the description text. Matching tolerates the two paraphrase
+// shapes descriptions produce legitimately:
+//   1. Punctuation is tokenized away — "docs(dev1-006):" splits into "docs" and
+//      "dev1", so a description quoting `dev1-006` counts even though it never
+//      reproduces the headline's exact bracketed scope.
+//   2. A trailing "s" is stemmed — a commit titled "plans" is covered by the
+//      phrase "planning artifacts" (observed on kottaby/kottaby#56: four such
+//      commits sank coverage to 12/17 despite being correctly described).
 
 export function commitHeadline(commitMessage: string): string {
   return (commitMessage.split("\n")[0] ?? "").toLowerCase();
 }
 
 export function commitHeadlineWords(commitMessage: string): string[] {
+  // Unicode-aware: punctuation ( brackets, colons, hyphens) splits tokens, but
+  // non-Latin letters stay intact so RTL/CJK headlines keep their words.
   return commitHeadline(commitMessage)
-    .split(/\s+/)
+    .split(/[^\p{L}\p{N}]+/u)
     .filter((w) => w.length > 3);
+}
+
+// A >3-char word counts as present when it or its singular stem (trailing "s"
+// stripped, still >3 chars) appears in the text as a substring.
+function wordAppears(word: string, loweredText: string): boolean {
+  if (loweredText.includes(word)) return true;
+  const stem = word.endsWith("s") ? word.slice(0, -1) : "";
+  return stem.length > 3 && loweredText.includes(stem);
 }
 
 // A headline with no >3-char word at all (emoji-only, "a b c") can never match
@@ -31,7 +48,7 @@ export function commitHeadlineWords(commitMessage: string): string[] {
 // such commits are mathematically uncoverable and silently sink the ratio.
 function isCommitCovered(commitMessage: string, loweredText: string): boolean {
   const words = commitHeadlineWords(commitMessage);
-  if (words.length > 0) return words.some((w) => loweredText.includes(w));
+  if (words.length > 0) return words.some((w) => wordAppears(w, loweredText));
   const headline = commitHeadline(commitMessage).trim();
   return headline !== "" && loweredText.includes(headline);
 }
