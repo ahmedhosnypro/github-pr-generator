@@ -1,7 +1,7 @@
 // Shared fixtures and mock plumbing for the callAPI unit tests
 // (tests/llm.ts and tests/llm-resilience.ts). Mocks global fetch —
 // no real network.
-import { NO_CONTENT_TIMEOUT_BASE_MS, STREAM_STALL_TIMEOUT_MS } from "../src/background/llm";
+import { STREAM_STALL_TIMEOUT_MS } from "../src/background/llm";
 import type { ExtensionConfig } from "../src/types";
 
 export const BASE_CONFIG: ExtensionConfig = {
@@ -76,6 +76,46 @@ export function sseKeepaliveDripResponse(init?: RequestInit): Response {
   );
 }
 
+/**
+ * SSE body that trickles real content deltas (one per intervalMs for
+ * chunkCount chunks) and then closes with [DONE]. Bytes and content keep
+ * arriving, so neither the stall watchdog nor the no-content budget should
+ * ever fire — modelling a slow-but-healthy generation.
+ */
+export function sseContentDripResponse(
+  init: RequestInit | undefined,
+  chunkCount: number,
+  intervalMs: number,
+): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        let sent = 0;
+        const drip = (): void => {
+          try {
+            if (sent >= chunkCount) {
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
+            }
+            sent++;
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"x"}}]}\n\n'));
+          } catch {
+            return; // stream errored (aborted) — stop dripping
+          }
+          setTimeout(drip, intervalMs);
+        };
+        drip();
+        init?.signal?.addEventListener("abort", () => {
+          controller.error(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      },
+    }),
+    { status: 200, headers: sseHeaders() },
+  );
+}
+
 /** An error status followed by a body that never delivers a single byte. */
 export function stallingErrorBodyResponse(status: number): Response {
   return new Response(new ReadableStream<Uint8Array>({ start: () => {} }), { status });
@@ -83,7 +123,11 @@ export function stallingErrorBodyResponse(status: number): Response {
 
 function shrunk(delay?: number): number | undefined {
   if (delay === STREAM_STALL_TIMEOUT_MS) return 5;
-  if (delay === NO_CONTENT_TIMEOUT_BASE_MS) return 60;
+  // Scale the no-content budget ~5000× down rather than matching one exact
+  // value, so prompt-scaled budgets keep their ordering (300s→60ms,
+  // 480s→96ms, 600s→120ms) and a test can observe a large prompt outliving
+  // the 5-minute floor. Only timeouts above the stall watchdog are budgets.
+  if (delay !== undefined && delay > STREAM_STALL_TIMEOUT_MS) return Math.round(delay / 5000);
   return delay;
 }
 

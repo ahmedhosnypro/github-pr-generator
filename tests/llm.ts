@@ -1,7 +1,7 @@
 // Unit tests for callAPI (llm.ts): JSON parsing, retry policy, and the
 // request body contract. Mocks global fetch — no real network. Stall /
-// deadline / abort coverage lives in tests/llm-resilience.ts.
-import { callAPI, MAX_COMPLETION_TOKENS } from "../src/background/llm";
+// no-content-budget / abort coverage lives in tests/llm-resilience.ts.
+import { callAPI, MAX_COMPLETION_TOKENS, NO_CONTENT_TIMEOUT_BASE_MS, noContentTimeoutMs } from "../src/background/llm";
 import { expectMatch, getFailures } from "./expect-helpers";
 import { BASE_CONFIG, captureFailure, jsonResponse, sseEmptyResponse, sseFullResponse, withFetch } from "./llm-shared";
 
@@ -119,8 +119,21 @@ async function main(): Promise<void> {
 
   await testRequestBodyCap();
   await testMidMultibyteChunkSplit();
+  testNoContentBudgetScaling();
 
   reportOutcome();
+}
+
+/** The no-content budget floors at 5 min for small prompts, grows 4ms/char for big ones, caps at 10 min. */
+function testNoContentBudgetScaling(): void {
+  expectMatch("small prompt keeps 5-min budget floor", noContentTimeoutMs(100), NO_CONTENT_TIMEOUT_BASE_MS);
+  expectMatch("mid-size prompt still floored", noContentTimeoutMs(10_000), NO_CONTENT_TIMEOUT_BASE_MS);
+  // The kottaby#56 case: a near-budget 120k-char prompt spends minutes in
+  // prefill (keepalives only) — it must get ~8 minutes of budget, not the flat
+  // 5-minute floor that killed the real generation while content had not even
+  // started.
+  expectMatch("near-cap prompt gets a scaled budget", noContentTimeoutMs(120_000), 480_000);
+  expectMatch("budget capped at 10 minutes", noContentTimeoutMs(1_000_000), 600_000);
 }
 
 function reportOutcome(): void {
