@@ -307,7 +307,7 @@ The fetch-based suites (`bun run test:fetch`) will output:
 They use the GitHub CLI (`gh`) for all PR metadata (title, branches, commits, files, stats); the two prompt-building suites (`test:full`, `test:pr-creation`) additionally fetch the compare diff from the GitHub REST API with your `githubToken` as a Bearer token. You need:
 
 1. `gh` installed and authenticated (`gh auth login`)
-2. A non-empty `githubToken` in `config.local.json` (the suites refuse to run without one); use a valid PAT with `repo` scope for private repos
+2. Optionally, a `githubToken` in `config.local.json` — the suites only warn when it's missing, but diff fetches then run unauthenticated (lower rate limits, public repos only; use a PAT with `repo` scope for private repos)
 
 ---
 
@@ -334,7 +334,7 @@ To debug the background script:
 
 ### Content Script Console
 
-Open DevTools (`F12`) on the GitHub page. Look for `[PR Generator v1.6]` prefixed messages.
+Open DevTools (`F12`) on the GitHub page. Look for `[PR Generator vX.Y.Z]` prefixed messages — the version is read live from `manifest.json` (currently 1.7.1).
 
 ---
 
@@ -364,8 +364,11 @@ github-pr-generator/
 │   └── popup/                     # Popup modules: state/load/save, messaging, permissions,
 │                                  #  validation, Test API / Test GitHub, theme, UI helpers
 ├── scripts/
-│   ├── build.ts                   # bun build → dist/ + asset copy (strips secrets from config)
-│   ├── dev.ts                     # watch-mode rebuilds
+│   ├── build.ts                   # bun build → dist/ + asset copy (strips secrets from config;
+│   │                              #  fails on manifest/package version drift)
+│   ├── dev.ts                     # watch-mode rebuilds (picks up directories created after startup)
+│   ├── check-version-sync.ts      # manifest.json ↔ package.json version guard
+│   ├── strip-config.ts            # secret-stripping sanitizer shared by build + tests
 │   ├── quality-gate.ts            # staged quality gate with resume (see below)
 │   ├── improve-loop.ts            # automated description-improvement loop driver
 │   └── convert-icons.ts           # PNG icon generation from SVG (sharp)

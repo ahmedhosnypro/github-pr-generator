@@ -3,6 +3,8 @@
   "apiKey": "sk-YOUR-API-KEY-HERE",
   "githubToken": "",
   "model": "model_id",
+  "labModel": "model_id",
+  "labEffort": "low",
   "testPr": {
     "owner": "facebook",
     "repo": "react",

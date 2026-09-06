@@ -123,10 +123,13 @@ export async function runTest(title: string, run: TestFn): Promise<void> {
     console.error("No testPr configuration found in config.local.json");
     process.exit(1);
   }
-  const githubToken = config.githubToken;
+  // githubToken is optional: PR metadata comes from the authenticated gh CLI, and
+  // suites that fetch diffs (tests/prompt.ts) fall back to unauthenticated calls.
+  const githubToken = config.githubToken ?? "";
   if (!githubToken) {
-    console.error("No githubToken configured - cannot fetch PR data");
-    process.exit(1);
+    console.warn(
+      "Warning: no githubToken in config.local.json — PR data still fetched via gh; diff fetches run unauthenticated.",
+    );
   }
   try {
     runGhCommand("auth status");

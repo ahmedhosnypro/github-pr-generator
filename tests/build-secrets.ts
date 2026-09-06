@@ -56,6 +56,24 @@ expectMatch("array input yields empty config", Object.keys(sanitizeConfig([]).sa
 expectMatch("null input yields empty config", Object.keys(sanitizeConfig(null).sanitized).length, 0);
 expectMatch("string input yields empty config", Object.keys(sanitizeConfig("nope").sanitized).length, 0);
 
+// The credential-pattern check is case-insensitive across the whole key name.
+const mixedCase = sanitizeConfig({ APIKEY: "x", MonKey: "y", "GitHub-Token": "z", MY_SECRET: "s", model: "model_id" });
+expectMatch("uppercase KEY stripped", "APIKEY" in mixedCase.sanitized, false);
+expectMatch("mixed-case key stripped", "MonKey" in mixedCase.sanitized, false);
+expectMatch("token-suffixed key stripped", "GitHub-Token" in mixedCase.sanitized, false);
+expectMatch("secret-suffixed key stripped", "MY_SECRET" in mixedCase.sanitized, false);
+
+// Secret-look-alike keys with non-string values carry no real credential, so they
+// are dropped from the artifact but not reported in the stripped list.
+const nonString = sanitizeConfig({ apiKey: 12345, model: "model_id" });
+expectMatch("non-string apiKey removed", "apiKey" in nonString.sanitized, false);
+expectMatch("non-string secret not reported as stripped", nonString.stripped.includes("apiKey"), false);
+
+// Lab override fields (tests/pr-lab-run.ts) are not credentials and must survive.
+const labs = sanitizeConfig({ labModel: "fast-model", labEffort: "low", model: "model_id" });
+expectMatch("labModel kept", labs.sanitized.labModel, "fast-model");
+expectMatch("labEffort kept", labs.sanitized.labEffort, "low");
+
 // The denylist itself must stay non-empty and cover the two known secrets.
 expectMatch("denylist covers apiKey", (SECRET_CONFIG_FIELDS as readonly string[]).includes("apiKey"), true);
 expectMatch("denylist covers githubToken", (SECRET_CONFIG_FIELDS as readonly string[]).includes("githubToken"), true);
