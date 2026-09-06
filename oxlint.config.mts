@@ -9,7 +9,7 @@ const unusedVarOptions = {
 
 export default defineConfig({
   plugins: ["typescript", "unicorn", "oxc", "import", "promise", "node", "jsdoc"],
-  ignorePatterns: ["dist/**", "coverage/**"],
+  ignorePatterns: ["dist/**", "coverage/**", ".tower/**"],
   categories: {
     correctness: "error",
     suspicious: "warn",

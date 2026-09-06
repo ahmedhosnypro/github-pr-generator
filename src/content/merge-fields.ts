@@ -8,7 +8,7 @@ import { log } from "./log";
 // does not vary with the viewer's locale. Match on the live .value property:
 // React hydration drops the original `value=` attribute, so attribute
 // selectors go stale once the page has booted.
-export function isDefaultMergeTitle(value: string): boolean {
+function isDefaultMergeTitle(value: string): boolean {
   return value.startsWith("Merge pull request");
 }
 

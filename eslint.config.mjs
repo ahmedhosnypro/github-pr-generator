@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "icons/**"],
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "icons/**", ".tower/**"],
   },
   js.configs.recommended,
   // strictTypeChecked is a superset of recommendedTypeChecked — maximum type-aware bug detection
