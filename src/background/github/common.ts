@@ -6,7 +6,7 @@ export const GITHUB_JSON_ACCEPT = "application/vnd.github.v3+json";
 export const GITHUB_RAW_ACCEPT = "application/vnd.github.raw+json";
 export const GITHUB_DIFF_ACCEPT = "application/vnd.github.v3.diff";
 export const GITHUB_USER_AGENT = "github-pr-generator-extension";
-const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
+const GITHUB_REQUEST_TIMEOUT_MS = 15_000;
 const RATE_LIMIT_REMAINING_HEADER = "X-RateLimit-Remaining";
 const RATE_LIMIT_RESET_HEADER = "X-RateLimit-Reset";
 
@@ -60,18 +60,20 @@ export function rateLimitedResult(response: Response): GitHubErrorResult {
 }
 
 // Maps 403/429 responses in one place so diff/pr/list fetches agree: real
-// rate limiting to GITHUB_RATE_LIMITED, other 403s to GITHUB_FORBIDDEN (they
-// must NOT be surfaced as rate limiting). Returns null for other statuses.
-export function rateLimitOrForbidden(response: Response): GitHubErrorResult | null {
+// rate limiting (429, or 403 with the primary quota exhausted) goes to
+// GITHUB_RATE_LIMITED; every other 403 (SSO enforcement, insufficient token
+// permissions, secondary limits) is a plain GITHUB_API_ERROR with detail.
+// Returns null for other statuses.
+export function rateLimitOrApiError(response: Response): GitHubErrorResult | null {
   if (isRateLimited(response)) return rateLimitedResult(response);
   if (response.status === 403) {
     logMsg(
       "GitHub API 403 with rate limit remaining " +
         rateLimitRemaining(response) +
-        " - SSO/permissions, not rate limiting",
+        " - not rate limiting (SSO or token permissions)",
     );
     return {
-      error: "GITHUB_FORBIDDEN",
+      error: "GITHUB_API_ERROR",
       status: 403,
       message:
         "GitHub API 403 without exhausted rate limit - usually SSO enforcement or insufficient token permissions.",

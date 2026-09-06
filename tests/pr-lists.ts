@@ -136,7 +136,7 @@ async function testCommitsRateLimited429(): Promise<void> {
 }
 
 // (6) 403 disambiguation: remaining 0 → GITHUB_RATE_LIMITED; remaining > 0 →
-// GITHUB_FORBIDDEN (SSO/permissions, not rate limiting).
+// GITHUB_API_ERROR with detail (SSO/permissions, not rate limiting).
 async function testFiles403Disambiguation(): Promise<void> {
   await withFetch(
     () => Promise.resolve(new Response("exhausted", { status: 403, headers: { "X-RateLimit-Remaining": "0" } })),
@@ -153,7 +153,52 @@ async function testFiles403Disambiguation(): Promise<void> {
     () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "59" } })),
     async () => {
       const out = await fetchPRFiles(BASE_CONFIG, "octocat", "hello-world", "42");
-      expectMatch("403 with remaining 59 maps to GITHUB_FORBIDDEN", "error" in out && out.error, "GITHUB_FORBIDDEN");
+      expectMatch("403 with remaining 59 maps to GITHUB_API_ERROR", "error" in out && out.error, "GITHUB_API_ERROR");
+      expectMatch("403 with remaining 59 carries status", "error" in out && out.status, 403);
+    },
+  );
+}
+
+// (6b) Invalid owner/repo guards on fetchPRCommits and fetchPRFiles.
+async function testInvalidOwnerRepo(): Promise<void> {
+  let calls = 0;
+  const spy: FetchImpl = () => {
+    calls++;
+    return Promise.resolve(jsonResponse([]));
+  };
+  await withFetch(spy, async () => {
+    const badOwner = await fetchPRCommits(BASE_CONFIG, "bad/owner", "hello-world", "42");
+    expectMatch(
+      "commits: invalid owner returns GITHUB_INVALID_CONTEXT",
+      "error" in badOwner && badOwner.error,
+      "GITHUB_INVALID_CONTEXT",
+    );
+  });
+  await withFetch(spy, async () => {
+    const badRepo = await fetchPRFiles(BASE_CONFIG, "octocat", "..", "42");
+    expectMatch(
+      "files: invalid repo returns GITHUB_INVALID_CONTEXT",
+      "error" in badRepo && badRepo.error,
+      "GITHUB_INVALID_CONTEXT",
+    );
+  });
+  expectMatch("invalid owner/repo means fetch never called", calls, 0);
+}
+
+// (6c) Pagination is bounded: a server that always returns full pages stops
+// at MAX_PAGES (10 × 100 items) instead of looping forever.
+async function testPaginationBounded(): Promise<void> {
+  let calls = 0;
+  const fullPage = () => jsonResponse(Array.from({ length: 100 }, () => ({ commit: { message: "m" } })));
+  await withFetch(
+    () => {
+      calls++;
+      return Promise.resolve(fullPage());
+    },
+    async () => {
+      const out = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42");
+      expectMatch("bounded pagination stops at 10 pages", calls, 10);
+      expectMatch("bounded pagination returns 10x100 commits", "commits" in out && out.commits.length, 1000);
     },
   );
 }
@@ -188,6 +233,8 @@ async function main(): Promise<void> {
   await testFilesSuccess();
   await testCommitsRateLimited429();
   await testFiles403Disambiguation();
+  await testInvalidOwnerRepo();
+  await testPaginationBounded();
   await testCommitsFetchTimeout();
 
   const failures = getFailures();

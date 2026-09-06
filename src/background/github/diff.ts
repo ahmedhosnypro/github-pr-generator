@@ -7,7 +7,7 @@ import {
   GITHUB_USER_AGENT,
   isValidPrNumber,
   isValidRepoName,
-  rateLimitOrForbidden,
+  rateLimitOrApiError,
   rateLimitRemaining,
 } from "./common";
 import { parseHunkLineRanges, truncateDiff } from "./diff-parse";
@@ -18,7 +18,7 @@ async function diffFailure(response: Response): Promise<GitHubErrorResult | null
     return { error: "GITHUB_404" };
   }
 
-  const blocked = rateLimitOrForbidden(response);
+  const blocked = rateLimitOrApiError(response);
   if (blocked) return blocked;
 
   if (!response.ok) {

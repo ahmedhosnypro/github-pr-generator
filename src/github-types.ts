@@ -7,7 +7,6 @@ type GitHubErrorCode =
   | "GITHUB_403"
   | "GITHUB_422"
   | "GITHUB_RATE_LIMITED"
-  | "GITHUB_FORBIDDEN"
   | "GITHUB_API_ERROR"
   | "GITHUB_NETWORK_ERROR"
   | "GITHUB_INVALID_CONTEXT"
@@ -78,7 +77,7 @@ export interface GitHubPRApiResponse {
   title?: string;
   body?: string | null;
   base?: { ref?: string } | null;
-  head?: { ref?: string; label?: string } | null;
+  head?: { ref?: string; label?: string; repo?: { full_name?: string } | null } | null;
   additions?: number;
   deletions?: number;
   changed_files?: number;
