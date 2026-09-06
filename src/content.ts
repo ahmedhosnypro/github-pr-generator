@@ -61,6 +61,9 @@ const observer = new MutationObserver((mutations) => {
 });
 
 let mergeCheckInterval: ReturnType<typeof setInterval> | null = null;
+// Last known merge-dialog visibility, so the 1s poll logs only on transitions
+// instead of once per tick while the dialog sits open.
+let mergeDialogSeenOpen: boolean | null = null;
 
 function startMergeCheckInterval(): void {
   if (mergeCheckInterval) return;
@@ -71,7 +74,12 @@ function startMergeCheckInterval(): void {
       mergeCheckInterval = null;
       return;
     }
-    if (isMergeConfirmationPage()) {
+    const mergeOpen = isMergeConfirmationPage();
+    if (mergeOpen !== mergeDialogSeenOpen && (mergeOpen || mergeDialogSeenOpen !== null)) {
+      log("info", mergeOpen ? "Merge dialog detected" : "Merge dialog closed");
+    }
+    mergeDialogSeenOpen = mergeOpen;
+    if (mergeOpen) {
       // Keep polling: the dialog can close and reopen (its DOM, including our
       // injected buttons, is recreated each time). injectMergeButtons is
       // id-guarded, so repeat calls on the same dialog are no-ops.

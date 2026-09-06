@@ -46,23 +46,32 @@ function openedHeader(body: StubElement): void {
 function confirmMergeBox(body: StubElement): void {
   body.appendChild(h("div", { class: "ConfirmMergeDialog ConfirmMerge" }));
 }
-// The merge dialog's title input matches on the *attribute* ("Merge pull
-// request" initial value), so it must be setAttribute'd, not property-set.
-function mergeInput(): StubElement {
-  const input = h("input", { "data-component": "input", type: "text" });
-  input.setAttribute("value", "Merge pull request #42 from octo/feature");
-  return input;
+// Detection reads the LIVE .value property so it survives React hydration
+// (which keeps the property but not the value= attribute). The fixture
+// builder `h` sets "value" as a property, mirroring post-hydration markup.
+function mergeInput(attrs: Record<string, string> = {}): StubElement {
+  return h("input", { type: "text", ...attrs, value: "Merge pull request #42 from octo/feature" });
 }
 function mergeInputOnly(body: StubElement): void {
-  body.appendChild(mergeInput());
+  body.appendChild(mergeInput({ "data-component": "input" }));
 }
 function mergePairPrcTextarea(body: StubElement): void {
-  body.appendChild(mergeInput());
+  body.appendChild(mergeInput({ "data-component": "input" }));
   body.appendChild(h("textarea", { class: "prc-Textarea-TextArea abc" }));
 }
 function mergePairPlaceholderTextarea(body: StubElement): void {
-  body.appendChild(mergeInput());
+  body.appendChild(mergeInput({ "data-component": "input" }));
   body.appendChild(h("textarea", { placeholder: "Add an optional extended description…" }));
+}
+// Post-hydration markup: no data-component attribute at all, only the live
+// value and the Primer textarea class remain as anchors.
+function hydratedMergePair(body: StubElement): void {
+  body.appendChild(mergeInput());
+  body.appendChild(h("textarea", { class: "prc-Textarea-TextArea xyz" }));
+}
+function nonMergePair(body: StubElement): void {
+  body.appendChild(h("input", { type: "text", value: "search the repo" }));
+  body.appendChild(h("textarea", { class: "prc-Textarea-TextArea abc" }));
 }
 
 console.log("=== Page Detection Tests ===\n");
@@ -94,12 +103,14 @@ detect("opened", isPROpenedPage, [
 detect("merge", isMergeConfirmationPage, [
   { name: "ConfirmMerge container detected", url: PR_URL, build: confirmMergeBox, expected: true },
   { name: "merge input + prc textarea pair detected", url: PR_URL, build: mergePairPrcTextarea, expected: true },
+  { name: "hydrated markup detected via live value", url: PR_URL, build: hydratedMergePair, expected: true },
   {
-    name: "merge input + placeholder textarea detected",
+    name: "placeholder-only textarea rejected (locale-fragile copy)",
     url: PR_URL,
     build: mergePairPlaceholderTextarea,
-    expected: true,
+    expected: false,
   },
+  { name: "non-merge text input + prc textarea rejected", url: PR_URL, build: nonMergePair, expected: false },
   { name: "merge input alone insufficient", url: PR_URL, build: mergeInputOnly, expected: false },
   { name: "bare PR page rejected", url: PR_URL, build: nothing, expected: false },
   { name: "non-github host rejected", url: OFFSITE_PR_URL, build: confirmMergeBox, expected: false },
