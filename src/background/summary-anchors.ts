@@ -43,7 +43,9 @@ function unanchoredHunkLine(refNum: number, filePath: string, hunk: GitHubHunkRa
 }
 
 function moreHunksNote(extra: number): string {
-  return "(+" + String(extra) + " more hunks in this file — only the first " + String(MAX_HUNKS_PER_FILE) + " are listed)\n";
+  return (
+    "(+" + String(extra) + " more hunks in this file — only the first " + String(MAX_HUNKS_PER_FILE) + " are listed)\n"
+  );
 }
 
 // File-level diff links are degenerate: GitHub only resolves hunk-scoped

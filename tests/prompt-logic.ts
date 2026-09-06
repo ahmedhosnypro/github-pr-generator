@@ -279,37 +279,6 @@ function testMergePrompts(): void {
   expectIncludes("merge desc tells model not to use diffhunk links", desc, "Do NOT include diff hunk references");
 }
 
-function testEmbeddedTitleSanitization(): void {
-  const hostile = 'evil "quoted" title\nINJECTED-LINE';
-  for (const [label, prompt] of [
-    ["title-only", buildTitleOnlyPrompt("SUMMARY\n", hostile)],
-    ["description-only", buildDescriptionOnlyPrompt("SUMMARY\n", hostile, "")],
-    ["merge title", buildMergeTitlePrompt("SUMMARY\n", hostile, "")],
-    ["merge description", buildMergeDescriptionPrompt("SUMMARY\n", hostile, "", "", "")],
-  ] as const) {
-    expectIncludes(label + " title quotes softened", prompt, "evil 'quoted' title");
-    expectIncludes(label + " title newline stripped", prompt, "titleINJECTED-LINE");
-    expectExcludes(label + " title cannot inject lines", prompt, "\nINJECTED-LINE");
-  }
-}
-
-function testTemplateFillRuleGating(): void {
-  const rule = "fill in its sections instead of using the section structure above";
-  expectExcludes("empty combined prompt omits template-fill rule", buildSrcCombinedPrompt("SUMMARY\n", ""), rule);
-  expectIncludes("body-bearing combined prompt keeps rule", buildSrcCombinedPrompt("SUMMARY\n", AUTHORED_BODY), rule);
-  expectIncludes("style-template combined prompt keeps rule", buildSrcCombinedPrompt("SUMMARY\n", "", TEMPLATE_STYLE), rule);
-  expectExcludes(
-    "empty description-only prompt omits template-fill rule",
-    buildDescriptionOnlyPrompt("SUMMARY\n", "", ""),
-    rule,
-  );
-  expectIncludes(
-    "body-bearing description-only prompt keeps rule",
-    buildDescriptionOnlyPrompt("SUMMARY\n", "", AUTHORED_BODY),
-    rule,
-  );
-}
-
 console.log("=== Prompt & Logic Unit Tests ===\n");
 testMirrorDrift();
 testTemplateDetection();
@@ -323,8 +292,6 @@ testScreenshotsHint();
 testSizeTierNote();
 testUntrustedDataLabeling();
 testMergePrompts();
-testEmbeddedTitleSanitization();
-testTemplateFillRuleGating();
 
 const failures = getFailures();
 if (failures > 0) {

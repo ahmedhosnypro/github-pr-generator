@@ -113,7 +113,10 @@ function buildStatsSection(stats: PRStats): string {
 // Anchors are only usable when there are real hunks to hang them on: a bare
 // file anchor would produce the degenerate file-only marker, which GitHub
 // cannot resolve to a hunk-scoped link. Noise files never count either.
-export function hasUsableAnchors(_fileChanges: FileChange[] | undefined, hunkRanges: GitHubHunksByFile | null): boolean {
+export function hasUsableAnchors(
+  _fileChanges: FileChange[] | undefined,
+  hunkRanges: GitHubHunksByFile | null,
+): boolean {
   return countUsableAnchors(_fileChanges, hunkRanges) > 0;
 }
 

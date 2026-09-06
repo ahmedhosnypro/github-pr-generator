@@ -1,12 +1,14 @@
-import { buildCombinedPrompt } from "../src/background/prompts/combined";
-import { buildDescriptionOnlyPrompt } from "../src/background/prompts/pr-prompts";
 import { resolveDiffLinks } from "../src/background/linkify";
+import { buildCombinedPrompt } from "../src/background/prompts/combined";
+import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../src/background/prompts/merge-prompts";
+import { buildDescriptionOnlyPrompt, buildTitleOnlyPrompt } from "../src/background/prompts/pr-prompts";
+import type { RepoStyle } from "../src/background/repo-style";
 import { countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
 import { buildAnchorsSection, MAX_HUNKS_PER_FILE } from "../src/background/summary-anchors";
 import type { GitHubHunkRange, GitHubHunksByFile } from "../src/github-types";
 import type { FileChange } from "../src/types";
-import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
-import { K8S_TEMPLATE } from "./fixtures";
+import { expectExcludes, expectIncludes, expectMatch, getFailures } from "./expect-helpers";
+import { AUTHORED_BODY, K8S_TEMPLATE } from "./fixtures";
 
 // Offline assertions for the render-quality contract from
 // analysis/pull-requests/render-quality-plan.md (corpus presentation study).
@@ -128,6 +130,50 @@ function testAnchorCapsAndNoise(): void {
   expectIncludes("excess hunks folded into a note", section, "(+3 more hunks");
 }
 
+const TEMPLATE_STYLE: RepoStyle = {
+  template: K8S_TEMPLATE,
+  titleStyle: null,
+  exampleTitles: [],
+  length: null,
+  templateHeavy: true,
+  aiDisclosure: false,
+};
+
+function testEmbeddedTitleSanitization(): void {
+  const hostile = 'evil "quoted" title\nINJECTED-LINE';
+  for (const [label, prompt] of [
+    ["title-only", buildTitleOnlyPrompt("SUMMARY\n", hostile)],
+    ["description-only", buildDescriptionOnlyPrompt("SUMMARY\n", hostile, "")],
+    ["merge title", buildMergeTitlePrompt("SUMMARY\n", hostile, "")],
+    ["merge description", buildMergeDescriptionPrompt("SUMMARY\n", hostile, "", "", "")],
+  ] as const) {
+    expectIncludes(label + " title quotes softened", prompt, "evil 'quoted' title");
+    expectIncludes(label + " title newline stripped", prompt, "titleINJECTED-LINE");
+    expectExcludes(label + " title cannot inject lines", prompt, "\nINJECTED-LINE");
+  }
+}
+
+function testTemplateFillRuleGating(): void {
+  const rule = "fill in its sections instead of using the section structure above";
+  expectExcludes("empty combined prompt omits template-fill rule", buildCombinedPrompt("SUMMARY\n", ""), rule);
+  expectIncludes("body-bearing combined prompt keeps rule", buildCombinedPrompt("SUMMARY\n", AUTHORED_BODY), rule);
+  expectIncludes(
+    "style-template combined prompt keeps rule",
+    buildCombinedPrompt("SUMMARY\n", "", TEMPLATE_STYLE),
+    rule,
+  );
+  expectExcludes(
+    "empty description-only prompt omits template-fill rule",
+    buildDescriptionOnlyPrompt("SUMMARY\n", "", ""),
+    rule,
+  );
+  expectIncludes(
+    "body-bearing description-only prompt keeps rule",
+    buildDescriptionOnlyPrompt("SUMMARY\n", "", AUTHORED_BODY),
+    rule,
+  );
+}
+
 console.log("=== Render-Quality Prompt Assertions ===\n");
 testSummaryWording();
 testChangesAndWalkthroughWording();
@@ -138,6 +184,8 @@ testAnchorDiscipline();
 testAnchorsRequireHunks();
 testAnchorEmissionRoundTrip();
 testAnchorCapsAndNoise();
+testEmbeddedTitleSanitization();
+testTemplateFillRuleGating();
 
 const failures = getFailures();
 if (failures > 0) {
