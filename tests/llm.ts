@@ -24,6 +24,35 @@ async function testRequestBodyCap(): Promise<void> {
   );
 }
 
+/** A multibyte UTF-8 char split across two body byte-chunks must survive TextDecoder streaming in readStreamedCompletion. */
+async function testMidMultibyteChunkSplit(): Promise<void> {
+  const payload = 'data: {"choices":[{"delta":{"content":"héllo 🎉 world"}}]}\n\ndata: [DONE]\n\n';
+  const bytes = new TextEncoder().encode(payload);
+  // Split inside the 4-byte emoji: the first chunk ends on a continuation byte.
+  const emojiOffset = new TextEncoder().encode(payload.slice(0, payload.indexOf("🎉"))).length;
+  const splitAt = emojiOffset + 2;
+  expectMatch("split lands on a UTF-8 continuation byte", ((bytes[splitAt] ?? 0) & 0xc0) === 0x80, true);
+  await withFetch(
+    () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(bytes.slice(0, splitAt));
+              controller.enqueue(bytes.slice(splitAt));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    async () => {
+      const out = await callAPI(BASE_CONFIG, "prompt");
+      expectMatch("multibyte char split across byte chunks reassembled", out, "héllo 🎉 world");
+    },
+  );
+}
+
 async function main(): Promise<void> {
   // Plain JSON response — no SSE, no stream.
   await withFetch(
@@ -89,6 +118,7 @@ async function main(): Promise<void> {
   );
 
   await testRequestBodyCap();
+  await testMidMultibyteChunkSplit();
 
   reportOutcome();
 }
