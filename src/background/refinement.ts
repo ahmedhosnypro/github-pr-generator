@@ -1,5 +1,5 @@
 import type { ExtensionConfig, PRStats } from "../types";
-import { ensureArtifactEnding, missingAuthoredText, wrapLongProseLines } from "./description-normalize";
+import { ensureArtifactEnding, missingAuthoredSentences, wrapLongProseLines } from "./description-normalize";
 import { callAPI } from "./llm";
 import { logMsg } from "./log";
 import { wrapUntrustedData } from "./prompts/common";
@@ -203,11 +203,12 @@ async function runIteration(a: IterationArgs): Promise<{ next: RefinementState; 
     logMsg(`Iteration ${a.iter}: score ${scored.score}/${a.maxScore} (was ${a.current.score}/${a.maxScore})`);
 
     if (a.preserveAuthoredBody) {
-      // A higher-scoring draft that dropped any authored paragraph still
-      // loses — reject it exactly like a regression, before adoption.
-      const lost = missingAuthoredText(a.current.description, wrapped);
+      // A higher-scoring draft that dropped any sampled authored sentence (the
+      // verbatim-survival contract) still loses — reject it exactly like a
+      // regression, before adoption.
+      const lost = missingAuthoredSentences(a.current.description, wrapped);
       if (lost.length > 0) {
-        logMsg(`Iteration ${a.iter}: authored prose lost (${lost.length} paragraph(s)) — keeping previous`);
+        logMsg(`Iteration ${a.iter}: authored prose lost (${String(lost.length)} sentence(s)) — keeping previous`);
         return { next: a.current, outcome: "done" };
       }
     }

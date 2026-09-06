@@ -1,5 +1,10 @@
+import { stripBotArtifacts } from "../src/background/bot-artifacts";
 import { countCoveredCommits, coverageThreshold } from "../src/background/commit-coverage";
-import { ensureArtifactEnding, wrapLongProseLines } from "../src/background/description-normalize";
+import {
+  ensureArtifactEnding,
+  missingAuthoredSentences,
+  wrapLongProseLines,
+} from "../src/background/description-normalize";
 import { scoreDescription } from "../src/background/refinement-checks";
 import { expectMatch, getFailures } from "./expect-helpers";
 import { FULL_DESCRIPTION, LARGE_STATS, SMALL_STATS } from "./refinement-shared";
@@ -202,6 +207,12 @@ async function testCommitCoverage(): Promise<void> {
     0,
   );
   expectMatch("short words (<4 chars) do not count", countCoveredCommits(["fix a bug"], "a bug"), 0);
+  expectMatch(
+    "word-less headline falls back to full-headline match",
+    countCoveredCommits(["a b c"], "mentions a b c verbatim"),
+    1,
+  );
+  expectMatch("word-less headline still misses when absent", countCoveredCommits(["a b c"], "unrelated text"), 0);
   expectMatch("threshold: ≤20 commits requires 90%", coverageThreshold(10), 0.9);
   expectMatch("threshold: 122 commits declines to the 60% floor", coverageThreshold(122), 0.6);
   expectMatch("threshold: 80 commits is 0.6 via linear decline", coverageThreshold(80), 0.6);
@@ -227,6 +238,80 @@ async function testCommitCoverage(): Promise<void> {
   );
 }
 
+// Opener limit is tied to the normalizer's wrap target (PROSE_LINE_TARGET =
+// 390): a 301..390-char opener line is never wrapped, so the check must accept
+// it — otherwise the length is unfixable without a wasted LLM iteration.
+async function testOpenerDeadZone(): Promise<void> {
+  const opener = `Fixed ${"the token expiry race condition ".repeat(11)}for good.`; // 373 chars
+  expectMatch("opener sits in the old dead zone", opener.length > 300 && opener.length <= 390, true);
+  const desc = [
+    "## Summary",
+    opener,
+    "",
+    "## Changes",
+    "- **Auth** — refresh early [[1]](diffhunk://#diff-aaaa_L1-R2)",
+    "- **Gate** — block stale [[2]](diffhunk://#diff-bbbb_L1-R2)",
+    "- **Tests** — add coverage [[3]](diffhunk://#diff-cccc_L1-R2)",
+    "",
+    "Scope: 3 files, +10/-2",
+  ].join("\n");
+  const stats = { files: 3, additions: 10, deletions: 2 };
+  expectMatch(
+    "dead-zone opener passes the opener check",
+    (await scoreDescription(desc, [], true, stats)).failures.every((f) => f.check !== "opener"),
+    true,
+  );
+}
+
+// The anchor requirement is capped by the anchors the prompt actually offered
+// (anchorCount), not by the file count.
+async function testAnchorSupplyCap(): Promise<void> {
+  const oneAnchor =
+    "## Summary\nFixed the token expiry race early.\n\n## Changes\n- **Auth** — refresh early [[1]](diffhunk://#diff-aaaa_L1-R2)\n\nScope: 5 files, +12/-3";
+  const fiveFiles = { files: 5, additions: 12, deletions: 3 };
+  const capped = await scoreDescription(oneAnchor, [], true, fiveFiles, "full", 1);
+  expectMatch(
+    "1 offered anchor demands only 1 link",
+    capped.failures.every((f) => f.check !== "anchors"),
+    true,
+  );
+  const uncapped = await scoreDescription(oneAnchor, [], true, fiveFiles, "full", 5);
+  expectMatch(
+    "5 offered anchors still demand 3 links",
+    uncapped.failures.some((f) => f.check === "anchors"),
+    true,
+  );
+}
+
+// Preserve-authored guard: substantial authored sentences (>80 chars) must
+// survive verbatim (up to whitespace re-flow); short notes are not sampled.
+function testAuthoredSentenceGuard(): void {
+  const longSentence =
+    "This fixes the token expiry race I hit while dogfooding the extension nightly and it kept recurring.";
+  const before = `${longSentence}\n\nShort note.`;
+  expectMatch("identical text keeps every sentence", missingAuthoredSentences(before, before).length, 0);
+  expectMatch(
+    "re-wrapped sentence counts as preserved",
+    missingAuthoredSentences(before, before.replace("race I hit", "race\nI hit")).length,
+    0,
+  );
+  expectMatch("dropped long sentence is reported", missingAuthoredSentences(before, "Short note.").length, 1);
+  expectMatch("dropped short sentence is not sampled", missingAuthoredSentences(before, longSentence).length, 0);
+}
+
+// Bot-artifact edge cases: '>' inside a whole-comment marker, and a generated
+// body that only matches isLikelyTemplate's bare 2+-heading clause must still
+// lose its rubber-stamp checklist.
+function testBotArtifactEdges(): void {
+  const marked = stripBotArtifacts("Body text.\n<!-- coderabbit: src > dist -->\nMore text.");
+  expectMatch("comment marker containing '>' is stripped", marked.includes("coderabbit"), false);
+
+  const generated = "## Summary\nReal fix.\n\n## Verification\n- [x] Tested locally\n- [x] Verified no regressions";
+  const cleaned = stripBotArtifacts(generated);
+  expectMatch("2-heading generated body is not a template", cleaned.includes("Tested locally"), false);
+  expectMatch("generated prose itself kept", cleaned.includes("Real fix."), true);
+}
+
 async function main(): Promise<void> {
   await testAnchorGating();
   await testProportionalSize();
@@ -234,6 +319,10 @@ async function main(): Promise<void> {
   testProseWrap();
   await testArtifactEnding();
   await testCommitCoverage();
+  await testOpenerDeadZone();
+  await testAnchorSupplyCap();
+  testAuthoredSentenceGuard();
+  testBotArtifactEdges();
 
   const failures = getFailures();
   if (failures > 0) {

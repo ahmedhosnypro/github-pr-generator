@@ -16,13 +16,20 @@ type Check = (description: string) => CheckResult | null;
 // subsection, not to the opener.
 const summarySliceRe = /^## Summary\n([\s\S]*?)(?=\n#{2,6} |$(?![\s\S]))/m;
 
+// Wrap target shared with the normalizer (description-normalize.ts hard-wraps
+// prose lines beyond it). Checks must accept everything up to this target —
+// a check stricter than the wrap target creates a dead zone (301..390 chars)
+// where a line fails the check yet is never wrapped. Kept under the 400-char
+// render-check limit in checkLineLength.
+export const PROSE_LINE_TARGET = 390;
+
 function checkOpener(description: string): CheckResult | null {
   const summaryMatch = description.match(summarySliceRe);
   if (!summaryMatch?.[1]) {
     return { score: 0, failures: [{ check: "opener", detail: "no Summary section" }] };
   }
   const first = summaryMatch[1].trim().split("\n")[0] || "";
-  if (!(first.length > 0 && first.length <= 300 && first.trim() !== "")) {
+  if (!(first.length > 0 && first.length <= PROSE_LINE_TARGET && first.trim() !== "")) {
     return { score: 0, failures: [{ check: "opener", detail: first.slice(0, 80) }] };
   }
   return null;

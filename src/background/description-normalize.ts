@@ -7,9 +7,8 @@
 // steps, or HTML comments. Runs before scoring so these fixes are free.
 
 import type { PRStats } from "../types";
-import { ARTIFACT_ENDING_RE } from "./refinement-checks";
+import { ARTIFACT_ENDING_RE, PROSE_LINE_TARGET } from "./refinement-checks";
 
-const PROSE_LINE_TARGET = 390; // headroom under the 400-char render check
 const SENTENCE_BREAK = /(?<=[.!?]) (?=[A-Z`("[])/;
 
 function backtickCount(text: string): number {
@@ -94,6 +93,31 @@ export function missingAuthoredText(before: string, after: string): string[] {
     if (needle === "") continue;
     if (!haystack.includes(" " + needle + " ")) {
       missing.push(block);
+    }
+  }
+  return missing;
+}
+
+// Only substantial authored sentences are sampled: a dropped 10-word note is
+// far less damning than a dropped thesis, and demanding every short sentence
+// verbatim would reject legitimate minimal edits.
+const AUTHORED_SAMPLE_MIN = 80;
+
+/**
+ * The refinement loop's acceptance guard for preserve-authored mode: returns
+ * the authored sentences from `before` (those long enough to be a real loss,
+ * 80+ chars) that do not survive — verbatim, up to whitespace re-flow — in
+ * `after`. Sentence sampling instead of missingAuthoredText's whole-paragraph
+ * matching, so a permitted small edit (appending a Testing section, wrapping a
+ * long line, splitting a paragraph) never counts as losing the author's words.
+ */
+export function missingAuthoredSentences(before: string, after: string): string[] {
+  const haystack = " " + squish(after) + " ";
+  const missing: string[] = [];
+  for (const sentence of squish(before).split(/(?<=[.!?]) /)) {
+    if (sentence.length < AUTHORED_SAMPLE_MIN) continue;
+    if (!haystack.includes(" " + sentence + " ")) {
+      missing.push(sentence);
     }
   }
   return missing;

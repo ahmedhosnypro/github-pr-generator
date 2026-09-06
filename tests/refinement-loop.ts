@@ -79,7 +79,7 @@ const WORSE =
   "that meanders without specifics about files behavior or verification steps whatsoever " +
   "and keeps padding itself with empty phrases so the attempt clears the minimum length gate " +
   "while saying less and less about anything that a reviewer could actually check or use " +
-  "until it finally trails off" +
+  "until it finally trails off into more and more empty filler" +
   "\n\n## Notes\nShort filler line.\n";
 
 // Scores measured once from the real scorer; every loop assertion below refers

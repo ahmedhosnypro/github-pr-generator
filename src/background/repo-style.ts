@@ -52,9 +52,12 @@ function classifyTitle(title: string): TitleStyle {
 }
 
 export function inferTitleStyle(titles: string[]): { style: TitleStyle | null; examples: string[] } {
-  if (titles.length < MIN_TITLE_SAMPLE) return { style: null, examples: [] };
+  // Blank titles (scrape misses) carry no convention signal — drop them before
+  // sampling so they can't dilute the dominant share or leak into examples.
+  const usable = titles.filter((t) => t.trim() !== "");
+  if (usable.length < MIN_TITLE_SAMPLE) return { style: null, examples: [] };
   const counts = new Map<TitleStyle, number>();
-  for (const title of titles) {
+  for (const title of usable) {
     const style = classifyTitle(title);
     counts.set(style, (counts.get(style) ?? 0) + 1);
   }
@@ -66,15 +69,17 @@ export function inferTitleStyle(titles: string[]): { style: TitleStyle | null; e
       bestCount = count;
     }
   }
-  if (bestCount / titles.length < DOMINANT_SHARE) {
-    return { style: "mixed", examples: titles.slice(0, 3) };
+  if (bestCount / usable.length < DOMINANT_SHARE) {
+    return { style: "mixed", examples: usable.slice(0, 3) };
   }
-  return { style: best, examples: titles.filter((t) => classifyTitle(t) === best).slice(0, 3) };
+  return { style: best, examples: usable.filter((t) => classifyTitle(t) === best).slice(0, 3) };
 }
 
 // Word count with template boilerplate stripped, so scaffold-heavy repos are
 // measured on authored content only (cf. corpus "template-heavy bimodal counts").
-// Comment removal is indexOf-based (no multi-line regex backtracking).
+// Comment removal is indexOf-based (no multi-line regex backtracking). An
+// unterminated <!-- keeps its tail as authored text (fail-open): a stray
+// marker must not silently zero out the rest of the measurement.
 function stripHtmlComments(text: string): string {
   let out = "";
   let rest = text;
@@ -82,7 +87,7 @@ function stripHtmlComments(text: string): string {
   while (start !== -1) {
     out += rest.slice(0, start);
     const end = rest.indexOf("-->", start + 4);
-    if (end === -1) return out;
+    if (end === -1) return out + rest.slice(start);
     rest = rest.slice(end + 3);
     start = rest.indexOf("<!--");
   }
@@ -91,7 +96,14 @@ function stripHtmlComments(text: string): string {
 
 function authoredWordCount(body: string): number {
   let total = 0;
+  let inFence = false;
   for (const line of stripHtmlComments(body).split("\n")) {
+    // Fenced blocks are quoted logs/commands, not authored prose — skip them.
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     if (/^#{1,6}\s/.test(line)) continue;
     if (/^[-*]\s+\[[ x]\]/i.test(line)) continue;
     total += line.split(/\s+/).filter((w) => w.length > 0).length;

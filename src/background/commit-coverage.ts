@@ -26,9 +26,19 @@ export function commitHeadlineWords(commitMessage: string): string[] {
     .filter((w) => w.length > 3);
 }
 
+// A headline with no >3-char word at all (emoji-only, "a b c") can never match
+// on words, so it falls back to a full-headline substring match — otherwise
+// such commits are mathematically uncoverable and silently sink the ratio.
+function isCommitCovered(commitMessage: string, loweredText: string): boolean {
+  const words = commitHeadlineWords(commitMessage);
+  if (words.length > 0) return words.some((w) => loweredText.includes(w));
+  const headline = commitHeadline(commitMessage).trim();
+  return headline !== "" && loweredText.includes(headline);
+}
+
 export function countCoveredCommits(commitMessages: string[], text: string): number {
   const lowered = text.toLowerCase();
-  return commitMessages.filter((commit) => commitHeadlineWords(commit).some((w) => lowered.includes(w))).length;
+  return commitMessages.filter((commit) => isCommitCovered(commit, lowered)).length;
 }
 
 /**
