@@ -1,3 +1,4 @@
+import { startsWithKnownSection } from "../background/parse";
 import { STREAM_PORT_NAME, type StreamRequest } from "../messages";
 import type { StreamedResult, StreamPortMessage } from "../responses";
 import { errorMessage } from "./errors";
@@ -111,6 +112,9 @@ export function cleanStreamedTitle(title: string): string {
  */
 export function splitStreamedCombined(raw: string): { title: string; description: string } {
   const text = raw.replace(/^```\w*\n?/, "");
+  // A body-only stream opens with a section heading ("## Summary"…); mirror
+  // parseCombinedResponse's guard so it never flashes in the title field.
+  if (startsWithKnownSection(text)) return { title: "", description: text };
   const doubleNewlineIdx = text.indexOf("\n\n");
   if (doubleNewlineIdx !== -1) {
     return {

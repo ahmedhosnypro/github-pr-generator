@@ -92,10 +92,12 @@ function splitTitleAndDescription(cleaned: string): GenerateResponse {
 // Models sometimes answer the combined prompt with the description body alone
 // ("## Summary\n..."). A leading known-section heading is description content,
 // never a title — returning an empty title lets the caller keep the user's
-// existing title instead of filling "Summary" into the title field.
+// existing title instead of filling "Summary" into the title field. Exported:
+// the streaming splitter (src/content/stream.ts) uses the same predicate so a
+// heading-leading stream never flashes a section name in the title field.
 const KNOWN_SECTION_HEADING = /^#{1,6}\s*(?:summary|changes|testing|walkthrough|description)\b/i;
 
-function startsWithKnownSection(text: string): boolean {
+export function startsWithKnownSection(text: string): boolean {
   const first = text.split("\n").find((line) => line.trim() !== "") ?? "";
   return KNOWN_SECTION_HEADING.test(first);
 }
