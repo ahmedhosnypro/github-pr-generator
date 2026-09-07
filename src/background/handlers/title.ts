@@ -100,6 +100,8 @@ export async function handleGenerateTitle(data: OpenedPRData): Promise<GenerateT
     },
     gathered.diffText,
     gathered.hunkRanges,
+    // Title prompts never carry diff hunk links — no anchors in the summary.
+    false,
   );
   logMsg("handleGenerateTitle - built changesSummary, length: " + String(changesSummary.length));
 

@@ -279,6 +279,26 @@ function testMergePrompts(): void {
   expectIncludes("merge desc tells model not to use diffhunk links", desc, "Do NOT include diff hunk references");
 }
 
+function testAnchorsOptOut(): void {
+  const data = {
+    commits: [{ message: "feat: add thing" }],
+    fileChanges: [{ path: "src/a.ts", type: "modified" as const, additions: 5, deletions: 1, diffAnchor: "" }],
+    stats: { files: 1, additions: 5, deletions: 1 },
+  };
+  const hunkRanges = { "src/a.ts": [{ rightStart: 5, rightCount: 6 }] };
+  const withAnchors = buildChangesSummary(data, null, hunkRanges);
+  expectIncludes("anchors on by default", withAnchors, "## File Anchors and Hunk Line Ranges");
+  const without = buildChangesSummary(data, null, hunkRanges, false);
+  expectExcludes("opt-out drops the anchors section", without, "## File Anchors and Hunk Line Ranges");
+  expectExcludes("opt-out drops diffhunk markers", without, "diffhunk://");
+  // Opt-out removes exactly the anchors section: the rest of the summary is
+  // byte-identical to a run where no usable anchors existed at all.
+  expectMatch("opt-out equals a hunkless summary", without, buildChangesSummary(data, null, null));
+  expectIncludes("opt-out keeps commits", without, "feat: add thing");
+  expectIncludes("opt-out keeps changed files", without, "src/a.ts");
+  expectIncludes("opt-out keeps stats", without, "1 changed files");
+}
+
 console.log("=== Prompt & Logic Unit Tests ===\n");
 testMirrorDrift();
 testTemplateDetection();
@@ -291,6 +311,7 @@ testBotStrippingSmoke();
 testScreenshotsHint();
 testSizeTierNote();
 testUntrustedDataLabeling();
+testAnchorsOptOut();
 testMergePrompts();
 
 const failures = getFailures();
