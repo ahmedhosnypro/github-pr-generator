@@ -76,6 +76,25 @@ console.log("=== SSE Parser Tests ===\n");
   expectMatch("empty payloads skipped", out.length, 0);
 }
 
+// Non-string content (arrays/objects/numbers — OpenAI vision-style parts or a
+// malformed payload) must not propagate: forwarding it would corrupt the
+// joined aggregate for both the delta and the snapshot paths.
+{
+  const p = createSSEParser();
+  const arrDelta = JSON.stringify({ choices: [{ delta: { content: [{ text: "x" }] } }] });
+  const numDelta = JSON.stringify({ choices: [{ delta: { content: 42 } }] });
+  const out = p.push(`data: ${arrDelta}\n\ndata: ${numDelta}\n\ndata: ${deltaJson("real")}\n\n`);
+  expectMatch("non-string deltas dropped, strings kept", out.join("|"), "real");
+}
+{
+  const p = createSSEParser();
+  const arrSnapshot = JSON.stringify({ choices: [{ message: { content: [{ text: "x" }] } }] });
+  p.push(`data: ${arrSnapshot}\n\n`);
+  expectMatch("non-string snapshot never stored", p.getSnapshot(), "");
+  p.push(`data: ${messageJson("string snapshot")}\n\n`);
+  expectMatch("string snapshot still captured", p.getSnapshot(), "string snapshot");
+}
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

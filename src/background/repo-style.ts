@@ -3,7 +3,7 @@
  * extension samples the repo's recently merged PRs (titles + bodies) and its
  * PR template, then derives conventions on the fly. Works for any repository.
  */
-import { isLikelyTemplate } from "./prompts/common";
+import { isLikelyTemplate, quoteEmbeddedTitle } from "./prompts/common";
 
 export type TitleStyle = "conventional" | "imperative" | "colon-prefix" | "bracket-prefix" | "mixed";
 export type LengthBucket = "S" | "M" | "L";
@@ -165,8 +165,11 @@ export function buildHouseStyleNote(style: RepoStyle): string {
   let note = "## House Style (inferred from this repo's recently merged PRs)\n";
   if (style.titleStyle) {
     note += "- Titles here use " + TITLE_STYLE_TEXT[style.titleStyle] + ".\n";
+    // Example titles are attacker-controlled merged-PR text echoed into
+    // instruction-grade prompt lines: soften quotes and strip control chars
+    // (same hygiene as the merge prompts' embedded titles).
     for (const example of style.exampleTitles) {
-      note += '  - e.g. "' + example + '"\n';
+      note += '  - e.g. "' + quoteEmbeddedTitle(example) + '"\n';
     }
   }
   if (style.length) {

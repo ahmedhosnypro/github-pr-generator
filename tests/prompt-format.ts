@@ -1,9 +1,10 @@
+import { stripBotArtifacts } from "../src/background/bot-artifacts";
 import { resolveDiffLinks } from "../src/background/linkify";
 import { buildCombinedPrompt } from "../src/background/prompts/combined";
 import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../src/background/prompts/merge-prompts";
 import { buildDescriptionOnlyPrompt, buildTitleOnlyPrompt } from "../src/background/prompts/pr-prompts";
 import type { RepoStyle } from "../src/background/repo-style";
-import { countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
+import { buildCommitListText, countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
 import { buildAnchorsSection, MAX_HUNKS_PER_FILE } from "../src/background/summary-anchors";
 import type { GitHubHunkRange, GitHubHunksByFile } from "../src/github-types";
 import type { FileChange } from "../src/types";
@@ -130,6 +131,46 @@ function testAnchorCapsAndNoise(): void {
   expectIncludes("excess hunks folded into a note", section, "(+3 more hunks");
 }
 
+function testAnchorsPrototypeKeys(): void {
+  // Files named after Object.prototype members must anchor like any other:
+  // on a plain-object seenFiles map the read side ("constructor"/"toString"
+  // read back prototype members) skips them, and a silent __proto__ write
+  // leaves the unanchored pass re-emitting the same file.
+  const hunkRanges: GitHubHunksByFile = { constructor: hunks(1), toString: hunks(1) };
+  const section = buildAnchorsSection([fc("constructor", 3, 1), fc("toString", 2, 1)], hunkRanges);
+  expectIncludes("file named 'constructor' anchored", section, "`constructor`");
+  expectIncludes("file named 'toString' anchored", section, "`toString`");
+
+  const protoRanges: GitHubHunksByFile = { ["__proto__"]: hunks(1) };
+  const protoSection = buildAnchorsSection([fc("__proto__", 3, 1)], protoRanges);
+  const mentions = protoSection.match(/`__proto__`/g) ?? [];
+  expectMatch("__proto__ file emitted exactly once (seen recorded)", mentions.length, 1);
+}
+
+function testCategoryBulletAnchoring(): void {
+  // Category headers ("**Bug Fixes**") are stripped only as bullets — plain
+  // prose mentioning the phrase is authored content and must survive.
+  const botBullets = "Fixed the token race.\n- **Bug Fixes**: corrected expiry handling\nDone.";
+  expectMatch("category bullet stripped", stripBotArtifacts(botBullets).includes("**Bug Fixes**"), false);
+  const proseMention = "The changelog groups this under **Bug Fixes** alongside the retry work.";
+  expectMatch(
+    "prose mention of **Bug Fixes** survives",
+    stripBotArtifacts(proseMention).includes("**Bug Fixes**"),
+    true,
+  );
+}
+
+function testCommitSubjectSurrogateCut(): void {
+  // The 197-char cap must cut between code points: an emoji straddling the
+  // boundary must be kept whole, never split into a lone surrogate (the
+  // summary feeds the prompt verbatim; a broken pair renders as U+FFFD).
+  const emoji = "\uD83D\uDE00"; // 😀 — one code point, two UTF-16 code units
+  const subject = "a".repeat(196) + emoji + "z".repeat(10);
+  const text = buildCommitListText([subject]);
+  expectIncludes("emoji at the cut survives whole", text, emoji + "...");
+  expectMatch("no lone surrogate emitted", /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(text), false);
+}
+
 const TEMPLATE_STYLE: RepoStyle = {
   template: K8S_TEMPLATE,
   titleStyle: null,
@@ -184,6 +225,9 @@ testAnchorDiscipline();
 testAnchorsRequireHunks();
 testAnchorEmissionRoundTrip();
 testAnchorCapsAndNoise();
+testAnchorsPrototypeKeys();
+testCategoryBulletAnchoring();
+testCommitSubjectSurrogateCut();
 testEmbeddedTitleSanitization();
 testTemplateFillRuleGating();
 

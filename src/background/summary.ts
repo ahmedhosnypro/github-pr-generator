@@ -40,14 +40,24 @@ const MAX_LISTED_FILES = 300;
 // Cap each message: the API returns the full commit body, so one release-note
 // commit can add kilobytes to the prompt, and raw commit text is a mild
 // prompt-injection surface. Only the subject line (the unit coverage analysis
-// cares about) is kept, control characters stripped, length capped.
+// cares about) is kept, control characters stripped, length capped. The cut
+// counts code points (Array.from, like the parse.ts headline trim) so it can
+// never split a surrogate pair.
+//
+// Known boundary drift (accepted, hunt M28): the commit-coverage scorer stems
+// words from the FULL headline while the prompt shows only this capped slice,
+// so a commit whose every >3-char word starts past the 197-char cut can never
+// satisfy the coverage check. Accepted rather than weakening the scorer:
+// reaching it needs ~197 chars of leading short words, which real headlines
+// do not produce.
 const MAX_COMMIT_MESSAGE_LENGTH = 200;
 
 function sanitizeCommitMessage(message: string): string {
   const subject = message.split("\n", 1)[0] ?? "";
   const cleaned = subject.replace(/\p{Cc}|\p{Cf}/gu, "");
-  if (cleaned.length <= MAX_COMMIT_MESSAGE_LENGTH) return cleaned;
-  return cleaned.slice(0, MAX_COMMIT_MESSAGE_LENGTH - 3) + "...";
+  const chars = Array.from(cleaned);
+  if (chars.length <= MAX_COMMIT_MESSAGE_LENGTH) return cleaned;
+  return chars.slice(0, MAX_COMMIT_MESSAGE_LENGTH - 3).join("") + "...";
 }
 
 // Capped, sanitized commit bullets shared by the generation prompt and the

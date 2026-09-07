@@ -85,7 +85,10 @@ function matchCompareFile(lines: string[], index: number): string | null {
 }
 
 export function parseHunkLineRanges(diffText: string): GitHubHunksByFile {
-  const hunksByFile: GitHubHunksByFile = {};
+  // Null-prototype map: a file named "__proto__" or "constructor" must key
+  // like any other instead of resolving to an Object.prototype member (which
+  // getFileHunks would then treat as an existing hunk array and crash on).
+  const hunksByFile: GitHubHunksByFile = Object.create(null) as GitHubHunksByFile;
   let currentFile: string | null = null;
   const lines = diffText.split("\n");
 

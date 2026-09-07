@@ -6,6 +6,12 @@ import { isLikelyTemplate } from "./prompts/common";
 // plus copyberry footers and copybara "Automated Code Change" bodies).
 // Implemented as per-line classifiers (simple linear regexes) rather than
 // multi-line backtracking patterns, so template content is never re-flowed.
+//
+// Known limitation (accepted, hunt M28): tool names match ASCII literally, so
+// a homoglyph-written signature (e.g. "CodeRabbit" spelled with a Cyrillic
+// 'o') evades these regexes. NFKC normalization would close that, but it is
+// over-engineering here: stripping is a cosmetic de-noising pass, not a
+// security boundary, and the cost would be normalizing every keystroke-line.
 
 const GENERATED_CREDIT = /\b(?:generated|created|produced|written)\s+(?:by|with|using)\b/i;
 const CREDIT_TOOL = /\b(?:CodeRabbit|cubic|Greptile|Copilot|Claude|ChatGPT|Gemini|LLM|AI assistant)\b/i;
@@ -14,7 +20,10 @@ const TRAILER_TOOL = /\b(?:CodeRabbit|coderabbitai|cubic|Greptile|Copilot|bot)\b
 // AI assistants an honest disclosure might credit — kept distinct from review
 // bots (CodeRabbit/Greptile/cubic), whose artifacts are always stripped.
 const DISCLOSURE_TOOL = /\b(?:Claude|Copilot|ChatGPT|Gemini|LLM|AI assistant)\b/i;
-const CATEGORY_BULLET = /\*\*(?:Bug Fixes|New Features|Documentation|Enhancements|Chores)\*\*/i;
+// CodeRabbit-style category bullets ("- **Bug Fixes**: ..."). Anchored to
+// bullet-start lines: plain prose merely mentioning "**Bug Fixes**" is
+// authored content and must survive.
+const CATEGORY_BULLET = /^\s*[-*+]\s+\*\*(?:Bug Fixes|New Features|Documentation|Enhancements|Chores)\*\*/i;
 const BADGE_ONLY = /^(?:!\[[^\]]*\]\([^)]*\)|\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\))$/;
 
 // Rubber-stamped "tested/verified" checklist lines (AutoGPT/x1xhlol anti-pattern).
