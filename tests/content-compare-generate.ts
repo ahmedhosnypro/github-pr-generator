@@ -118,11 +118,80 @@ async function testGenerateEmptyTitleGuard(): Promise<void> {
   expectMatch("still a success toast", toastState()?.text, "PR title and description generated!");
 }
 
+async function testGeneratePartialRollback(): Promise<void> {
+  console.log("--- compare-generate.ts partial-stream rollback ---");
+
+  // Mid-stream error after chunks streamed: both fields return to their
+  // pre-stream values and the toast names the rollback.
+  const page = buildComparePage();
+  addCompareData(page);
+  injectButtons();
+  page.titleInput.value = "User typed title";
+  page.bodyTextarea.value = "User typed body";
+
+  setStreamHandler((_request, emit) => {
+    emit({ kind: "chunk", text: "feat: partial title\n\npartial body" });
+    emit({ kind: "error", error: "model exploded" });
+  });
+  await handleGenerate();
+  expectMatch("mid-stream error: title restored", page.titleInput.value, "User typed title");
+  expectMatch("mid-stream error: body restored", page.bodyTextarea.value, "User typed body");
+  expectMatch(
+    "mid-stream error toast names rollback",
+    toastState()?.text,
+    "Error: model exploded (the partial streamed text was rolled back)",
+  );
+  expectMatch("mid-stream error toast styled", toastState()?.isError, true);
+  expectMatch("mid-stream error: button re-enabled", getButton(BTN_ID)?.disabled, false);
+
+  // Empty final parse after a streamed preview: restore rather than leaving
+  // truncated partials behind under a misleading success toast.
+  const page2 = buildComparePage();
+  addCompareData(page2);
+  injectButtons();
+  page2.titleInput.value = "User typed title";
+  page2.bodyTextarea.value = "User typed body";
+
+  setStreamHandler((_request, emit) => {
+    emit({ kind: "chunk", text: "feat: partial title\n\npartial body" });
+    emit({ kind: "done", result: { title: "", description: "" } });
+  });
+  await handleGenerate();
+  expectMatch("empty final: title restored", page2.titleInput.value, "User typed title");
+  expectMatch("empty final: body restored", page2.bodyTextarea.value, "User typed body");
+  expectMatch(
+    "empty final: honest toast",
+    toastState()?.text,
+    "The model returned an empty response — restored the previous text.",
+  );
+  expectMatch("empty final: error-styled toast", toastState()?.isError, true);
+
+  // Empty final with nothing streamed at all: fields untouched, plain toast.
+  const page3 = buildComparePage();
+  addCompareData(page3);
+  injectButtons();
+  page3.titleInput.value = "User typed title";
+  page3.bodyTextarea.value = "User typed body";
+  setStreamHandler((_request, emit) => {
+    emit({ kind: "done", result: { title: "", description: "" } });
+  });
+  await handleGenerate();
+  expectMatch("empty result, no stream: title untouched", page3.titleInput.value, "User typed title");
+  expectMatch("empty result, no stream: body untouched", page3.bodyTextarea.value, "User typed body");
+  expectMatch(
+    "empty result, no stream: toast",
+    toastState()?.text,
+    "The model returned an empty response — nothing was applied.",
+  );
+  expectMatch("empty result, no stream: error-styled", toastState()?.isError, true);
+}
+
 console.log("=== Content Script (compare page: generate flow) Tests ===\n");
 await testGenerateGuards();
 await testGenerateSuccess();
 await testGenerateStreamError();
 await testGenerateEmptyTitleGuard();
+await testGeneratePartialRollback();
 
 const failures = getFailures();
 if (failures > 0) {

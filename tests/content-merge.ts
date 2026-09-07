@@ -261,6 +261,46 @@ async function testMergeErrorPaths(): Promise<void> {
   expectMatch("no buttons: no toast", toastState(), null);
 }
 
+async function testMergePartialRollback(): Promise<void> {
+  console.log("--- merge-generate.ts partial-stream rollback ---");
+
+  // Mid-stream error after chunks: the pre-stream value returns, toast names it.
+  const page = buildMergeDialogPage();
+  injectMergeButtons();
+  setStreamHandler((_request, emit) => {
+    emit({ kind: "chunk", text: "feat: truncated partial" });
+    emit({ kind: "error", error: "upstream 500" });
+  });
+  await handleGenerateMergeTitle();
+  expectMatch("mid-stream error: prior title restored", page.titleInput.value, "Merge pull request #42 from o/feature");
+  expectMatch(
+    "mid-stream error toast names rollback",
+    toastState()?.text,
+    "Error: upstream 500 (the partial streamed text was rolled back)",
+  );
+  expectMatch("mid-stream error toast styled", toastState()?.isError, true);
+  expectMatch("mid-stream error: title button re-enabled", getButton(BTN_MERGE_TITLE_ID)?.disabled, false);
+
+  // Empty final parse after a stream preview: roll back instead of leaving
+  // the partial committed under a misleading success toast.
+  const page2 = buildMergeDialogPage();
+  injectMergeButtons();
+  page2.descTextarea.value = "existing merge notes";
+  setStreamHandler((_request, emit) => {
+    emit({ kind: "chunk", text: "half-written description" });
+    emit({ kind: "done", result: { description: "" } });
+  });
+  await handleGenerateMergeDescription();
+  expectMatch("empty final: streamed partial rolled back", page2.descTextarea.value, "existing merge notes");
+  expectMatch(
+    "empty final: toast names the restore",
+    toastState()?.text,
+    "Merge description was empty — restored the previous description.",
+  );
+  expectMatch("empty final: toast error-styled", toastState()?.isError, true);
+  expectMatch("empty final: desc button re-enabled", getButton(BTN_MERGE_DESC_ID)?.disabled, false);
+}
+
 function testMergeFieldProbe(): void {
   console.log("--- merge-fields.ts quiet probe + finder priority ---");
   const page = buildMergeDialogPage();
@@ -290,6 +330,7 @@ await testMergeTitleSuccess();
 await testMergeTitleEmptyResult();
 await testMergeDescriptionSuccess();
 await testMergeErrorPaths();
+await testMergePartialRollback();
 
 const failures = getFailures();
 if (failures > 0) {

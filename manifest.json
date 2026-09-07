@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "116",
   "name": "GitHub PR Generator",
   "version": "1.7.1",
   "description": "Generate GitHub PR title and description using an OpenAI-compatible API",

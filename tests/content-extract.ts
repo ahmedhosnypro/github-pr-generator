@@ -323,26 +323,35 @@ resetPage("https://github.com/octo/repo/compare/feature-only");
 expectMatch("compare URL single ref is head", extractBranchContext().headBranch, "feature-only");
 
 resetPage("https://github.com/octo/repo/pull/new/feature-x");
-addToPage(h("span", { class: "branch-name" }, "main"));
-addToPage(h("span", { class: "branch-name" }, "feature-x"));
+addToPage(h("span", { "data-component": "BranchName" }, "main"));
+addToPage(h("span", { "data-component": "BranchName" }, "feature-x"));
 {
   const ctx = extractBranchContext();
-  expectMatch("branch-name text base", ctx.baseBranch, "main");
-  expectMatch("branch-name text head", ctx.headBranch, "feature-x");
+  expectMatch("BranchName text base", ctx.baseBranch, "main");
+  expectMatch("BranchName text head", ctx.headBranch, "feature-x");
 }
 
 resetPage("https://github.com/octo/repo/pull/new/feature-x");
-addToPage(h("span", { class: "branch-name" }, "feature-x"));
-expectMatch("single branch-name fills head only", extractBranchContext().headBranch, "feature-x");
+addToPage(h("span", { "data-component": "BranchName" }, "feature-x"));
+expectMatch("single BranchName fills head only", extractBranchContext().headBranch, "feature-x");
 
 resetPage("https://github.com/octo/repo/some/other/page");
-addToPage(h("span", { class: "ref-name" }, "release-1"));
+addToPage(h("span", { class: "branch-name" }, "release-1"));
 addToPage(h("span", { class: "ref-name" }, "hotfix-2"));
-{
-  const ctx = extractBranchContext();
-  expectMatch("ref-name fallback base", ctx.baseBranch, "release-1");
-  expectMatch("ref-name fallback head", ctx.headBranch, "hotfix-2");
-}
+expectMatch("dead legacy selectors ignored", extractBranchContext().headBranch, "");
+
+// Compare-URL specs are percent-encoded in the address; they must be decoded
+// before the background encodes them again for the compare API.
+resetPage("https://github.com/octo/repo/compare/main...feature%2Fcaf%C3%A9");
+expectMatch("encoded compare head decoded", extractBranchContext().headBranch, "feature/café");
+
+// Malformed percent-escapes pass through unchanged instead of throwing.
+resetPage("https://github.com/octo/repo/compare/main...feature%zz");
+expectMatch("malformed percent-escape kept raw", extractBranchContext().headBranch, "feature%zz");
+
+// Malformed percent-escapes pass through unchanged instead of throwing.
+resetPage("https://github.com/octo/repo/compare/main...feature%zz");
+expectMatch("malformed percent-escape kept raw", extractBranchContext().headBranch, "feature%zz");
 
 const failures = getFailures();
 if (failures > 0) {

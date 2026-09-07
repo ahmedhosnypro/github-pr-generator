@@ -152,12 +152,20 @@ export interface ReviewModalOptions {
 
 const REVIEW_MODAL_ID = "ai-pr-review-modal";
 
+// Only one review modal can be live at a time. A replacement must go through
+// close() — a bare remove() would strand the old instance's document-level
+// Escape listener, which would then cancel into the old (stale) onCancel.
+let openModal: { close: () => void } | null = null;
+
 /**
  * On-page review panel for LLM proposals before they are written to the PR.
  * Everything is built with createElement/textContent so proposal text is never
  * interpreted as HTML.
  */
 export function showReviewModal(options: ReviewModalOptions): void {
+  openModal?.close();
+  openModal = null;
+  // Safety net for a modal left by an older script instance (pre-tracking).
   document.getElementById(REVIEW_MODAL_ID)?.remove();
 
   const overlay = document.createElement("div");
@@ -220,6 +228,7 @@ export function showReviewModal(options: ReviewModalOptions): void {
     closed = true;
     document.removeEventListener("keydown", onKeydown, true);
     overlay.remove();
+    if (openModal?.close === close) openModal = null;
   };
   const setBusy = (busy: boolean): void => {
     applyBtn.disabled = busy;
@@ -241,6 +250,7 @@ export function showReviewModal(options: ReviewModalOptions): void {
     options.onApply(value, { setBusy, close });
   });
   document.addEventListener("keydown", onKeydown, true);
+  openModal = { close };
 
   document.body.appendChild(overlay);
   field.focus();
