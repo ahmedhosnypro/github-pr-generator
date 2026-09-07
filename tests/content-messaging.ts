@@ -1,8 +1,9 @@
 // Unit tests for src/content/messaging.ts — sendToBackground's MV3 plumbing:
 // response resolution, one-shot retry on dropped SW channels, throws from a
-// dead receiver, error-object-vs-lastError precedence, and the timeout/keepalive
-// wiring (verified structurally; the 25s ping and 5min timeout are not waited
-// out). dom-stub provides document/window/chrome for log.ts; runtime is then
+// dead receiver, error-object-vs-lastError precedence, and the timeout
+// resolution (per-message-class windows plus the per-call override — verified
+// with a tiny override so no real waits; the 25s keepalive is structural only).
+// dom-stub provides document/window/chrome for log.ts; runtime is then
 // re-pointed at a recorder the tests drive.
 
 import type { ExtensionMessage } from "../src/messages";
@@ -21,7 +22,7 @@ chromeRef.runtime.sendMessage = (msg: unknown, cb: SendCallback): void => {
   onSend(msg, cb);
 };
 
-const { sendToBackground } = await import("../src/content/messaging");
+const { resolveTimeoutMs, sendToBackground } = await import("../src/content/messaging");
 
 interface RuntimeRef {
   runtime: { lastError: { message: string } | undefined };
@@ -39,6 +40,7 @@ function setLastErrorBeforeCallback(message: string, cb: SendCallback, resp: unk
 
 const CFG: ExtensionMessage = { type: "getConfig" } as unknown as ExtensionMessage;
 const CHANNEL_GONE = "A listener indicated an asynchronous response by returning true, but the message channel closed";
+const msgOfType = (type: string): ExtensionMessage => ({ type }) as unknown as ExtensionMessage;
 
 console.log("=== Content Messaging Tests ===\n");
 resetPage("https://github.com/o/r/pull/1");
@@ -139,6 +141,51 @@ onSend = (_msg, cb) => {
     caught = err instanceof Error ? err.message : String(err);
   }
   expectMatch("silent no-response rejects", caught, "No response from background");
+}
+
+// 8. Timeout resolution by message class: generation-class messages ride the
+// long window (unbounded-per-progress LLM work), bounded requests keep the
+// 5-minute default, and a per-call override wins over both.
+expectMatch("getConfig keeps the 5min default", resolveTimeoutMs(msgOfType("getConfig")), 5 * 60 * 1000);
+expectMatch("applyTitleUpdate keeps the 5min default", resolveTimeoutMs(msgOfType("applyTitleUpdate")), 5 * 60 * 1000);
+expectMatch(
+  "applyDescriptionUpdate keeps the 5min default",
+  resolveTimeoutMs(msgOfType("applyDescriptionUpdate")),
+  5 * 60 * 1000,
+);
+expectMatch("generateTitle gets the long window", resolveTimeoutMs(msgOfType("generateTitle")), 30 * 60 * 1000);
+expectMatch(
+  "generateDescription gets the long window",
+  resolveTimeoutMs(msgOfType("generateDescription")),
+  30 * 60 * 1000,
+);
+expectMatch(
+  "generateMergeTitle gets the long window",
+  resolveTimeoutMs(msgOfType("generateMergeTitle")),
+  30 * 60 * 1000,
+);
+expectMatch(
+  "generateMergeDescription gets the long window",
+  resolveTimeoutMs(msgOfType("generateMergeDescription")),
+  30 * 60 * 1000,
+);
+expectMatch("generate gets the long window", resolveTimeoutMs(msgOfType("generate")), 30 * 60 * 1000);
+expectMatch("override wins over the default", resolveTimeoutMs(msgOfType("getConfig"), 123), 123);
+expectMatch("override wins over the generation window", resolveTimeoutMs(msgOfType("generateTitle"), 123), 123);
+
+// 9. Per-call timeout override actually arms the timer: a background that never
+// responds rejects with the (override-derived) elapsed window in the message.
+{
+  lastError(undefined);
+  onSend = () => {};
+  let caught = "";
+  try {
+    await sendToBackground(CFG, { timeoutMs: 80 });
+  } catch (err) {
+    caught = err instanceof Error ? err.message : String(err);
+  }
+  expectIncludes("timeout override rejects with window", caught, "No response from background within 0.08s");
+  expectMatch("timed-out call was still sent", JSON.stringify(sentMessages.pop()), JSON.stringify(CFG));
 }
 
 const failures = getFailures();
