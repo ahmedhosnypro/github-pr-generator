@@ -1,6 +1,7 @@
+import { listedCommits } from "../src/background/commit-coverage";
 import { buildPromptFromContext } from "./prompt";
 import type { CoverageResult, TestContext } from "./testkit";
-import { runTest } from "./testkit";
+import { countCoveredCommits, runTest } from "./testkit";
 
 const CORPUS_WORDING_ASSERTIONS: [string, string, boolean][] = [
   ["A1", "scaled to the change", true],
@@ -12,7 +13,7 @@ const CORPUS_WORDING_ASSERTIONS: [string, string, boolean][] = [
   ["A9 (gated Problem section)", "(Conditional) ## Problem", true],
 ];
 
-function evaluatePrompt(commits: string[], prompt: string, coveredInSummary: number): CoverageResult {
+function evaluatePrompt(commits: string[], changesSummary: string, prompt: string): CoverageResult {
   const hasCommitCoverageSection = prompt.includes("Commit Coverage") && prompt.includes("MUST cover every commit");
   console.log(
     `Prompt includes Commit Coverage section: ${hasCommitCoverageSection ? "Yes" : "No"} (expected: Yes - no existing body)`,
@@ -27,7 +28,12 @@ function evaluatePrompt(commits: string[], prompt: string, coveredInSummary: num
     console.log(`  ${ok ? "✅" : "❌"} ${label}: ${needle.slice(0, 50)}`);
   }
 
-  const promptHasAllCommits = coveredInSummary === commits.length;
+  // The prompt lists only listedCommits(commits) — comparing against the raw
+  // total is unreachable for PRs with more commits than MAX_LISTED_COMMITS.
+  const listed = listedCommits(commits);
+  const listedCovered = countCoveredCommits(listed, changesSummary);
+  console.log(`\nListed commits represented in changes summary: ${String(listedCovered)}/${String(listed.length)}`);
+  const promptHasAllCommits = listedCovered === listed.length;
   if (promptHasAllCommits && hasCommitCoverageSection && wordingOk) {
     console.log("\n✅ TEST PASSED: PR creation page prompt includes all commits and coverage instruction");
     return { passed: true };
@@ -46,13 +52,13 @@ function evaluatePrompt(commits: string[], prompt: string, coveredInSummary: num
 
 async function testPRCreationPagePrompt(ctx: TestContext): Promise<CoverageResult> {
   // Simulate PR creation page - no existing body
-  const { commits, prompt, coveredInSummary } = await buildPromptFromContext(
+  const { commits, changesSummary, prompt } = await buildPromptFromContext(
     ctx,
     "",
     "\n=== PR Creation Page Prompt Analysis ===",
     " (simulated empty)",
   );
-  return evaluatePrompt(commits, prompt, coveredInSummary);
+  return evaluatePrompt(commits, changesSummary, prompt);
 }
 
 await runTest("=== GitHub PR Generator - PR Creation Page Prompt Test ===", testPRCreationPagePrompt);

@@ -29,7 +29,7 @@ function isLoopbackHostname(hostname: string): boolean {
   // "127." prefix check covers the whole [IP_REDACTED]/8 loopback block.
   if (host.startsWith("127.")) return true;
   // Hostname for IPv6 includes brackets under the WHATWG URL spec.
-  return host === "[[IP_REDACTED]]" || host === "[IP_REDACTED]";
+  return host === "[::1]";
 }
 
 /** True when the endpoint would carry the Bearer token over cleartext HTTP to a non-loopback host. */
@@ -39,15 +39,18 @@ function isInsecureHttpEndpoint(value: string): boolean {
   return !isLoopbackHostname(url.hostname);
 }
 
-function updateInsecureEndpointWarning(): void {
+// Pure DOM update — no fetch, no permission probe — so callers can invoke it
+// unconditionally (input listener, load.ts, pre-validation in validateEndpoint).
+export function updateInsecureEndpointWarning(): void {
   const insecure = isInsecureHttpEndpoint(endpointInput.value);
   insecureEndpointWarning.textContent = insecure ? INSECURE_WARNING_TEXT : "";
   insecureEndpointWarning.classList.toggle("visible", insecure);
 }
 
-// Pure UI updates only — no fetch. The input listener tracks live edits;
-// load.ts fills the field programmatically after storage resolves (no input
-// event), so re-check briefly after popup open until the field settles.
+// The input listener tracks live edits; load.ts also calls
+// updateInsecureEndpointWarning directly after applying the stored values (no
+// input event fires for that), so this interval is only a backstop — it stops
+// as soon as the field has content.
 endpointInput.addEventListener("input", updateInsecureEndpointWarning);
 let openChecks = 0;
 const openCheckTimer = setInterval(() => {
