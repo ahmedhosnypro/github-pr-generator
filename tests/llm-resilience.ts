@@ -10,6 +10,7 @@ import {
   sseContentDripResponse,
   sseEmptyResponse,
   sseKeepaliveDripResponse,
+  sseSnapshotDripResponse,
   sseStallResponse,
   stallingErrorBodyResponse,
   withFastTimers,
@@ -146,6 +147,48 @@ async function testSlowContentStreamSurvives(): Promise<void> {
   );
 }
 
+/**
+ * A NIM-style snapshot stream (deltas always empty, message.content growing
+ * every frame) is real content progress: it must re-arm the no-content budget
+ * and run past the shrunk floor budget (~60ms) to completion.
+ */
+async function testGrowingSnapshotStreamSurvives(): Promise<void> {
+  await withFastTimers(() =>
+    withFetch(
+      (_url, init) => Promise.resolve(sseSnapshotDripResponse(init, 100, 1)),
+      async () => {
+        const started = Date.now();
+        const chunks: string[] = [];
+        const out = await callAPI(BASE_CONFIG, "prompt", 0.3, (delta) => chunks.push(delta));
+        expectMatch("growing snapshot stream completed in full", out, "x".repeat(100));
+        expectMatch("final snapshot delivered as one chunk", chunks.join(""), "x".repeat(100));
+        expectMatch("snapshot stream survived past the floor budget", Date.now() - started >= 85, true);
+      },
+    ),
+  );
+}
+
+/**
+ * The counter-case: frames that repeat the SAME snapshot carry no new
+ * content, so the no-content budget must still kill the stream — re-arming on
+ * growth must not degenerate into re-arming on any frame.
+ */
+async function testStagnantSnapshotDripRejected(): Promise<void> {
+  await withFastTimers(() =>
+    withFetch(
+      (_url, init) => Promise.resolve(sseSnapshotDripResponse(init, 100_000, 1, false)),
+      async () => {
+        const failure = await captureFailure(() => callAPI(BASE_CONFIG, "prompt"));
+        expectMatch(
+          "stagnant snapshot drip killed by no-content budget",
+          failure instanceof Error ? failure.message : null,
+          NO_CONTENT_MESSAGE,
+        );
+      },
+    ),
+  );
+}
+
 async function main(): Promise<void> {
   // Stall watchdog coverage: silent stream, never-answering fetch.
   await expectStallRejection("stalled SSE stream rejected by watchdog", () => Promise.resolve(sseStallResponse()));
@@ -167,6 +210,8 @@ async function main(): Promise<void> {
   await testContentlessDripRejected();
   await testScaledBudgetForLargePrompt();
   await testSlowContentStreamSurvives();
+  await testGrowingSnapshotStreamSurvives();
+  await testStagnantSnapshotDripRejected();
 
   // Retry back-sleeps must honor caller abort.
   await expectSleepAborts("transient backoff sleep", () => new Response('{"error":"boom"}', { status: 503 }), 1500);

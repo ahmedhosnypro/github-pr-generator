@@ -39,6 +39,8 @@ export async function handleGenerateMergeTitle(
     },
     gathered.diffText,
     gathered.hunkRanges,
+    // Merge commit prompts forbid diff hunk links — no anchors in the summary.
+    false,
   );
   logMsg("handleGenerateMergeTitle - built changesSummary, length: " + String(changesSummary.length));
 
@@ -93,6 +95,9 @@ export async function handleGenerateMergeDescription(
     },
     gathered.diffText,
     gathered.hunkRanges,
+    // Anchors stay off: the merge prompt forbids diff hunk refs and this flow
+    // never calls resolveDiffLinks (see the refinement note below).
+    false,
   );
   logMsg("handleGenerateMergeDescription - built changesSummary, length: " + String(changesSummary.length));
 

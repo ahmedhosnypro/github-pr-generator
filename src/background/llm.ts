@@ -160,8 +160,9 @@ async function readStreamedCompletion(
   const decoder = new TextDecoder();
   let aggregated = "";
   // Content-progress timer: unlike the stall watchdog (which any bytes — even
-  // an empty keepalive frame — satisfy), this only resets when a real content
-  // delta arrives. A keepalive-only drip or a stream that never starts is
+  // an empty keepalive frame — satisfy), this only resets when real content
+  // progresses: either a content delta arrives, or a NIM-style full-content
+  // snapshot grows. A keepalive-only drip or a stream that never starts is
   // killed once the budget elapses; a stream that keeps producing tokens gets
   // unlimited total time no matter how slowly.
   let contentTimer: ReturnType<typeof setTimeout> | undefined;
@@ -172,6 +173,7 @@ async function readStreamedCompletion(
     }, contentBudgetMs);
   };
   armContentTimer();
+  let snapshotLength = 0;
   const deliver = (deltas: string[]): void => {
     let gotContent = false;
     for (const delta of deltas) {
@@ -180,6 +182,14 @@ async function readStreamedCompletion(
       onChunk?.(delta);
     }
     if (gotContent) armContentTimer();
+    // NIM-style snapshot streams: deltas stay empty while message.content
+    // grows frame by frame. That growth is real content progress too — without
+    // re-arming here the stream dies at the budget floor mid-generation.
+    const snapshot = parser.getSnapshot();
+    if (snapshot.length > snapshotLength) {
+      snapshotLength = snapshot.length;
+      armContentTimer();
+    }
   };
 
   try {

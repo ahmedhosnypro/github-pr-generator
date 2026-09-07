@@ -3,7 +3,15 @@
 // no-content-budget / abort coverage lives in tests/llm-resilience.ts.
 import { callAPI, MAX_COMPLETION_TOKENS, NO_CONTENT_TIMEOUT_BASE_MS, noContentTimeoutMs } from "../src/background/llm";
 import { expectMatch, getFailures } from "./expect-helpers";
-import { BASE_CONFIG, captureFailure, jsonResponse, sseEmptyResponse, sseFullResponse, withFetch } from "./llm-shared";
+import {
+  BASE_CONFIG,
+  captureFailure,
+  jsonResponse,
+  sseEmptyResponse,
+  sseFullResponse,
+  sseSnapshotResponse,
+  withFetch,
+} from "./llm-shared";
 
 /** The request body must cap completions at MAX_COMPLETION_TOKENS so long template fills are not truncated. */
 async function testRequestBodyCap(): Promise<void> {
@@ -114,6 +122,18 @@ async function main(): Promise<void> {
       const out = await callAPI(BASE_CONFIG, "prompt");
       expectMatch("transient 503 retried once, succeeds", out, "ok-after-503");
       expectMatch("exactly two attempts on transient", transientCalls, 2);
+    },
+  );
+
+  // SSE body that only carries full message.content snapshots (NIM-style):
+  // the aggregated result is the last snapshot, delivered as one chunk.
+  await withFetch(
+    () => Promise.resolve(sseSnapshotResponse("snapshot body only")),
+    async () => {
+      const chunks: string[] = [];
+      const out = await callAPI(BASE_CONFIG, "prompt", 0.3, (delta) => chunks.push(delta));
+      expectMatch("snapshot-only SSE body parses", out, "snapshot body only");
+      expectMatch("snapshot delivered as one chunk", chunks.join(""), "snapshot body only");
     },
   );
 

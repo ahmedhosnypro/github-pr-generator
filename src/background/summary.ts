@@ -142,11 +142,16 @@ export function buildChangesSummary(
   data: GenerateData,
   diffText: string | null,
   hunkRanges: GitHubHunksByFile | null,
+  includeAnchors = true,
 ): string {
   let summary = buildRepoSection(data.branchContext);
 
-  // Inject File Anchors and Hunk Line Ranges section
-  if (data.fileChanges && data.fileChanges.length > 0) {
+  // Inject File Anchors and Hunk Line Ranges section — but only for flows
+  // whose prompt rules actually use anchors and which run resolveDiffLinks on
+  // the answer. Merge/title prompts forbid diff hunk links and never resolve
+  // them, so their call sites opt out; otherwise the model can echo raw
+  // [[N]](diffhunk://...) markers into the merge commit text.
+  if (includeAnchors && data.fileChanges && data.fileChanges.length > 0) {
     if (hasUsableAnchors(data.fileChanges, hunkRanges)) {
       summary += buildAnchorsSection(data.fileChanges, hunkRanges);
     }

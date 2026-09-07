@@ -7,7 +7,7 @@
 // background module is imported (config.ts loads config.local.json at module
 // scope). No real network, no real extension APIs.
 import type { GenerateData, OpenedPRData } from "../src/types";
-import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
+import { expectExcludes, expectIncludes, expectMatch, getFailures } from "./expect-helpers";
 import {
   captureRejection,
   chainHandlers,
@@ -58,6 +58,8 @@ async function testGenerateHappyPath(): Promise<void> {
   expectIncludes("generate returns parsed description", result.description, "Mock generated description body");
   expectIncludes("generate forwards chunks to onChunk", chunks.join(""), "Mock generated description body");
   expectIncludes("generate prompt carries commit message", prompts[0] ?? "", "Add widget rendering support");
+  // The combined creation flow resolves diff links — anchors stay on.
+  expectIncludes("generate prompt keeps the anchors section", prompts[0] ?? "", "## File Anchors and Hunk Line Ranges");
   expectMatch(
     "generate fetches the compare diff",
     harness.fetchCalls.some((c) => c.url.includes("/compare/main...feature")),
@@ -99,6 +101,10 @@ async function testTitleHappyPath(): Promise<void> {
   expectMatch("title generate performs no PATCH", patchCalls(harness).length, 0);
   expectIncludes("title prompt carries commit message", prompts[0] ?? "", "Fix widget crash");
   expectIncludes("title prompt carries linked issue from commit", prompts[0] ?? "", "#42");
+  // The title flow never runs resolveDiffLinks and its prompt rules forbid
+  // diff hunk links, so the anchors section must not be offered at all.
+  expectExcludes("title prompt excludes the anchors section", prompts[0] ?? "", "## File Anchors");
+  expectExcludes("title prompt excludes diffhunk markers", prompts[0] ?? "", "diffhunk://");
 }
 
 async function testApplyTitleHappyPath(): Promise<void> {
@@ -171,6 +177,11 @@ async function testDescriptionHappyPath(): Promise<void> {
   // Two-phase review gate: generate proposes, nothing is written to the PR.
   expectMatch("description generate reports not updated", result.updated, false);
   expectMatch("description generate performs no PATCH", patchCalls(harness).length, 0);
+  expectIncludes(
+    "description prompt keeps the anchors section",
+    prompts[0] ?? "",
+    "## File Anchors and Hunk Line Ranges",
+  );
 }
 
 async function testApplyDescriptionHappyPath(): Promise<void> {
@@ -217,6 +228,9 @@ async function testMergeTitleHappyPath(): Promise<void> {
   expectMatch("merge title returns parsed title", result.title, "Squash-Merge Mock Title");
   expectMatch("merge title never PATCHes the PR", patchCalls(harness).length, 0);
   expectIncludes("merge title prompt carries commit message", prompts[0] ?? "", "Fix widget crash");
+  // Merge commit prompts forbid diff hunk references — no anchors offered.
+  expectExcludes("merge title prompt excludes the anchors section", prompts[0] ?? "", "## File Anchors");
+  expectExcludes("merge title prompt excludes diffhunk markers", prompts[0] ?? "", "diffhunk://");
 }
 
 async function testMergeDescriptionHappyPath(): Promise<void> {
@@ -232,6 +246,8 @@ async function testMergeDescriptionHappyPath(): Promise<void> {
   const result = await handleGenerateMergeDescription(OPENED_PR);
   expectIncludes("merge description returns refined body", result.description, "Mock merge description body");
   expectMatch("merge description never PATCHes the PR", patchCalls(harness).length, 0);
+  expectExcludes("merge description prompt excludes the anchors section", prompts[0] ?? "", "## File Anchors");
+  expectExcludes("merge description prompt excludes diffhunk markers", prompts[0] ?? "", "diffhunk://");
 }
 
 async function testGenerateHeadingOnlyResponse(): Promise<void> {

@@ -121,6 +121,62 @@ export function stallingErrorBodyResponse(status: number): Response {
   return new Response(new ReadableStream<Uint8Array>({ start: () => {} }), { status });
 }
 
+/** A complete SSE answer that carries full message.content (NIM-style), no deltas. */
+export function sseSnapshotResponse(content: string): Response {
+  return new Response(
+    'data: {"choices":[{"message":{"content":' + JSON.stringify(content) + "}}]}\n\ndata: [DONE]\n\n",
+    {
+      status: 200,
+      headers: sseHeaders(),
+    },
+  );
+}
+
+/**
+ * SSE body that drips full message.content snapshots (NIM-style): no delta
+ * content ever arrives, but each frame carries the whole answer so far. With
+ * `grow` the snapshots lengthen every tick — the no-content budget must treat
+ * that as progress; without growth they repeat byte-identical and the budget
+ * must still kill the stream.
+ */
+export function sseSnapshotDripResponse(
+  init: RequestInit | undefined,
+  chunkCount: number,
+  intervalMs: number,
+  grow = true,
+): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        let sent = 0;
+        const drip = (): void => {
+          try {
+            if (sent >= chunkCount) {
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
+            }
+            sent++;
+            const snapshot = grow ? "x".repeat(sent) : "snapshot";
+            controller.enqueue(
+              encoder.encode('data: {"choices":[{"message":{"content":' + JSON.stringify(snapshot) + "}}]}\n\n"),
+            );
+          } catch {
+            return; // stream errored (aborted) — stop dripping
+          }
+          setTimeout(drip, intervalMs);
+        };
+        drip();
+        init?.signal?.addEventListener("abort", () => {
+          controller.error(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      },
+    }),
+    { status: 200, headers: sseHeaders() },
+  );
+}
+
 function shrunk(delay?: number): number | undefined {
   if (delay === STREAM_STALL_TIMEOUT_MS) return 5;
   // Scale the no-content budget ~5000× down rather than matching one exact
