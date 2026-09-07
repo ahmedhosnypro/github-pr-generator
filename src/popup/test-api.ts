@@ -47,7 +47,8 @@ function aggregateSse(text: string): string {
 
 function parseApiResponse(resp: Response, contentType: string, text: string): ApiTestResult {
   if (contentType.includes("event-stream") || /^data:\s/m.test(text)) {
-    return { ok: resp.ok, status: resp.status, body: aggregateSse(text) || "(stream response)" };
+    if (!resp.ok) return { ok: false, status: resp.status, body: text };
+    return { ok: true, status: resp.status, body: aggregateSse(text) || "(stream response)" };
   }
   if (resp.ok) {
     try {
@@ -115,7 +116,7 @@ export function testApi(): void {
       messages: [{ role: "user", content: "Hello! Respond with exactly: OK" }],
       max_tokens: 10,
       temperature: 0,
-      stream: false,
+      stream: true,
     }),
     signal: AbortSignal.timeout(TEST_API_TIMEOUT_MS),
   })
