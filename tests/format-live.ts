@@ -7,7 +7,6 @@ import { buildCombinedPrompt } from "../src/background/prompts/combined";
 import { renderedLineLength } from "../src/background/refinement-checks";
 import { buildChangesSummary } from "../src/background/summary";
 import type { ExtensionConfig } from "../src/types";
-import { renderedLineLength } from "../src/background/refinement-checks";
 import { expectMatch, getFailures } from "./expect-helpers";
 import { loadConfig } from "./shared";
 

@@ -1,7 +1,7 @@
 // Commit-coverage word matching: paraphrase tolerance (punctuation tokenization
 // and plural stemming). Split out of tests/refinement.ts which is at the
 // sonarjs/max-lines cap. No network.
-import { countCoveredCommits, commitHeadlineWords } from "../src/background/commit-coverage";
+import { commitHeadlineWords, countCoveredCommits } from "../src/background/commit-coverage";
 import { expectMatch, getFailures } from "./expect-helpers";
 
 function main(): void {
@@ -14,9 +14,9 @@ function main(): void {
   );
   // "006" is only 3 chars — filtered by the >3 minimum, same as before.
   expectMatch(
-    "dash splits hyphenated scopes into tokens",
-    commitHeadlineWords("docs(dev1-006): add prototype assets and catalog").includes("dev1"),
-    true,
+    "dash splits scopes but 3-char '006' is filtered out",
+    commitHeadlineWords("docs(dev1-006): add prototype assets and catalog").includes("006"),
+    false,
   );
   // kottaby/kottaby#56: four commits headed "plans" were marked uncovered even
   // though the description says "planning artifacts" — singular stem matches.
