@@ -16,12 +16,12 @@ function analyzeDescription(commits: string[], prDescription: string): CoverageR
   console.log(`Description length: ${String(prDescription.length)} chars`);
 
   const { details } = computeCoverageDetails(commits, prDescription);
-  const { coverage, coveragePercent } = logCoverageVerdictBlock(
+  const { coverage, coveragePercent, requiredCoverage } = logCoverageVerdictBlock(
     "\n=== Coverage Results ===",
     "Commits covered",
     details,
   );
-  return { passed: coverage >= 90, coverage: coveragePercent };
+  return { passed: coverage >= requiredCoverage, coverage: coveragePercent };
 }
 
 function testCommitCoverage(ctx: TestContext): CoverageResult {

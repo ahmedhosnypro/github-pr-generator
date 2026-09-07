@@ -49,12 +49,12 @@ function testExtensionCommitCoverage(ctx: TestContext): CoverageResult {
 
   const prDescription = prDetails.body ?? "";
   const { details } = computeCoverageDetails(commits, prDescription);
-  const { covered, coverage, coveragePercent } = logCoverageVerdictBlock(
+  const { covered, coverage, coveragePercent, requiredCoverage } = logCoverageVerdictBlock(
     "\n=== PR Description Commit Coverage ===",
     "Commits covered in PR description",
     details,
   );
-  return { passed: coverage >= 90, coverage: coveragePercent, covered, total: commits.length };
+  return { passed: coverage >= requiredCoverage, coverage: coveragePercent, covered, total: commits.length };
 }
 
 await runTest("=== GitHub PR Generator - Extension Commit Coverage Test ===", testExtensionCommitCoverage);
