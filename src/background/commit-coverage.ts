@@ -28,7 +28,7 @@ export function commitHeadline(commitMessage: string): string {
 }
 
 export function commitHeadlineWords(commitMessage: string): string[] {
-  // Unicode-aware: punctuation ( brackets, colons, hyphens) splits tokens, but
+  // Unicode-aware: punctuation (brackets, colons, hyphens) splits tokens, but
   // non-Latin letters stay intact so RTL/CJK headlines keep their words.
   return commitHeadline(commitMessage)
     .split(/[^\p{L}\p{N}]+/u)
