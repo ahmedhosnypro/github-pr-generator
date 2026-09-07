@@ -37,7 +37,7 @@
     "test": "bun run test:logic && bun run test:parse && bun run test:format && bun run test:stream && bun run test:style && bun run test:refinement && bun run test:diff-parse && bun run test:config-save && bun run test:config-resolve && bun run test:pr-update && bun run test:discovery && bun run test:llm && bun run test:sse && bun run test:stream-render && bun run test:rubric && bun run test:linkify && bun run test:popup-text && bun run test:common && bun run test:diff-fetch && bun run test:pr-lists && bun run test:handlers && bun run test:routing && bun run test:port-stream && bun run test:refinement-loop && bun run test:validate-config && bun run test:improve-loop && bun run test:content-page-detect && bun run test:content-extract && bun run test:content-messaging && bun run test:content-compare && bun run test:content-merge && bun run test:content-opened && bun run test:content-opened-buttons && bun run test:build-secrets",
     "test:fetch": "bun run test:coverage && bun run test:extension && bun run test:full && bun run test:pr-creation",
     "test:all": "bun run test && bun run test:fetch",
-    "test:refinement": "bun run tests/refinement.ts && bun run tests/refinement-fences.ts && bun run tests/refinement-scoring.ts",
+    "test:refinement": "bun run tests/refinement.ts && bun run tests/refinement-fences.ts && bun run tests/refinement-scoring.ts && bun run tests/commit-coverage-words.ts",
     "test:diff-parse": "bun run tests/diff-parse.ts",
     "test:config-save": "bun run tests/config-save.ts",
     "test:config-resolve": "bun run tests/config-resolve.ts",
