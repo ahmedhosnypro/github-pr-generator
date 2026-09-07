@@ -243,6 +243,30 @@ const additionHunk = parseHunkLineRanges(additionDiff)["src/add.ts"]?.[0];
 expectMatch("pure addition: right start", additionHunk?.rightStart, 9);
 expectMatch("pure addition: right count", additionHunk?.rightCount, 3);
 
+// Prototype-named files ("__proto__", "constructor", "toString") must behave
+// like any other key: on a plain-object map, "constructor" reads back
+// Object.prototype.constructor (a function) and the hunk push then crashes
+// with a TypeError; "__proto__" assignments silently vanish.
+for (const protoFile of ["__proto__", "constructor", "toString"]) {
+  const protoDiff = [
+    `diff --git a/${protoFile} b/${protoFile}`,
+    `--- a/${protoFile}`,
+    `+++ b/${protoFile}`,
+    "@@ -1,1 +1,2 @@",
+    "+added",
+  ].join("\n");
+  const protoResult = parseHunkLineRanges(protoDiff);
+  expectMatch(`${protoFile}: hunk recorded without crash`, protoResult[protoFile]?.length, 1);
+  expectMatch(`${protoFile}: right start`, protoResult[protoFile]?.[0]?.rightStart, 1);
+}
+expectMatch(
+  "__proto__ file appears in Object.keys",
+  Object.keys(parseHunkLineRanges("diff --git a/__proto__ b/__proto__\n+++ b/__proto__\n@@ -1 +1 @@")).includes(
+    "__proto__",
+  ),
+  true,
+);
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

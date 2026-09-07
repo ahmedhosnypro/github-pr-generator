@@ -152,7 +152,12 @@ export function buildAnchorsSection(fileChanges: FileChange[], hunkRanges: GitHu
   summary +=
     "Use these attachment points to create clickable diff links. Format: `[[N]](diffhunk://#diff-HASH_Lstart-Rend)` where N is a sequential reference number. Only the files listed above have anchors — never invent `[[N]]` links for other files.\n\n";
 
-  const seenFiles: Record<string, boolean> = {};
+  // Null-prototype map (same reason as parseHunkLineRanges): a file named
+  // "__proto__" must record as seen, and "constructor" must not read back
+  // Object.prototype.constructor and get skipped. A skipped own write here
+  // would also understate Object.keys(seenFiles), overshooting the anchor cap
+  // that countUsableAnchors scales to.
+  const seenFiles: Record<string, boolean> = Object.create(null) as Record<string, boolean>;
   const anchored = emitAnchoredFiles(fileChanges, hunkRanges, seenFiles, 1);
 
   summary += anchored.text;

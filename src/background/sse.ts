@@ -7,8 +7,11 @@
 
 interface SSEChunk {
   choices?: {
-    delta?: { content?: string };
-    message?: { content?: string };
+    // Typed as unknown at the boundary: a malformed server payload can carry
+    // non-string content (arrays, numbers), which would corrupt the aggregate
+    // — the parser forwards string deltas only.
+    delta?: { content?: unknown };
+    message?: { content?: unknown };
   }[];
 }
 
@@ -33,7 +36,12 @@ function parseLine(line: string): ParsedLine | null {
   if (payload === "[DONE]" || payload === "") return null;
   try {
     const choice = (JSON.parse(payload) as SSEChunk).choices?.[0];
-    return { delta: choice?.delta?.content, snapshot: choice?.message?.content };
+    const delta = choice?.delta?.content;
+    const snapshot = choice?.message?.content;
+    return {
+      delta: typeof delta === "string" ? delta : undefined,
+      snapshot: typeof snapshot === "string" ? snapshot : undefined,
+    };
   } catch {
     return null; // non-JSON keepalive/comment line
   }

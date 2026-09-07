@@ -2,6 +2,7 @@
 // and plural stemming). Split out of tests/refinement.ts which is at the
 // sonarjs/max-lines cap. No network.
 import { commitHeadlineWords, countCoveredCommits } from "../src/background/commit-coverage";
+import { buildCommitListText } from "../src/background/summary";
 import { expectMatch, getFailures } from "./expect-helpers";
 
 function main(): void {
@@ -39,6 +40,31 @@ function main(): void {
     "4-char words stem too ('tests' -> 'test')",
     countCoveredCommits(["write tests"], "coverage from the test suite"),
     1,
+  );
+
+  // Scorer-vs-prompt-cut contract (accepted drift, hunt M28): the prompt
+  // lists subjects capped at 197 chars (summary.ts), but the scorer reads
+  // the FULL headline. Words before the cut are demanded AND listed — the
+  // agreed-on contract. A word that exists only past the cut stays demanded
+  // yet unreachable; pinning that asymmetry here documents the accepted
+  // drift instead of silently widening the scorer (commit-coverage.ts is a
+  // separate module and matching-on-truncation would weaken coverage).
+  const visible = "fix token expiry race " + "y ".repeat(120);
+  expectMatch(
+    "pre-cut word demanded and visible in the prompt list",
+    commitHeadlineWords(visible).includes("token") && buildCommitListText([visible]).includes("token"),
+    true,
+  );
+  const driftCut = "x ".repeat(98) + "supercalifragilistic";
+  expectMatch(
+    "past-cut word still demanded by scorer",
+    commitHeadlineWords(driftCut).includes("supercalifragilistic"),
+    true,
+  );
+  expectMatch(
+    "past-cut word never listed (expected-unfixable drift)",
+    buildCommitListText([driftCut]).includes("supercalifragilistic"),
+    false,
   );
 
   const failures = getFailures();
