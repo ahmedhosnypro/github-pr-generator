@@ -35,9 +35,65 @@ expectMatch("AbortError not a timeout", isTimeoutError(new DOMException("a", "Ab
 expectMatch("plain Error not a timeout", isTimeoutError(new Error("boom")), false);
 expectMatch("non-Error not a timeout", isTimeoutError("boom"), false);
 
+// readStorageWithTimeout (src/popup/load.ts): the storage read behind the
+// initial load must always settle — a lastError or a callback that never
+// fires (extension context invalidated) resolves to {} instead of leaving
+// the popup in the loading state. Importing load.ts module-evaluates the
+// element lookups and validate.ts's aria setup, so a minimal document stub
+// goes in first; any attribute the stub lacks is a no-op call.
+function elementStub(): Record<string, unknown> {
+  return new Proxy(
+    { value: "", textContent: "" },
+    {
+      get: (target: Record<string, unknown>, prop: string): unknown =>
+        prop in target ? target[prop] : () => elementStub(),
+    },
+  );
+}
+(globalThis as unknown as { document: unknown }).document = { getElementById: () => elementStub() };
+const { readStorageWithTimeout } = await import("../src/popup/load");
+
+const stored = { model: "gpt-x", apiKey: "sk-test" };
+const okRead = await readStorageWithTimeout(
+  (cb) => {
+    cb({ ...stored });
+  },
+  () => undefined,
+  50,
+);
+expectMatch("storage read resolves payload", JSON.stringify(okRead), JSON.stringify(stored));
+
+const lastErrorRead = await readStorageWithTimeout(
+  (cb) => {
+    cb({});
+  },
+  () => ({ message: "Extension context invalidated." }),
+  50,
+);
+expectMatch("lastError resolves empty config", JSON.stringify(lastErrorRead), "{}");
+
+const hungRead = await readStorageWithTimeout(
+  () => undefined,
+  () => undefined,
+  20,
+);
+expectMatch("stalled read times out to empty config", JSON.stringify(hungRead), "{}");
+
+const throwingRead = await readStorageWithTimeout(
+  () => {
+    throw new Error("boom");
+  },
+  () => undefined,
+  50,
+);
+expectMatch("throwing read resolves empty config", JSON.stringify(throwingRead), "{}");
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);
   process.exit(1);
 }
 console.log("\n✅ All popup text tests passed");
+// The dynamic load.ts import started validate.ts's open-check interval;
+// exit explicitly (as the content tests do) instead of waiting it out.
+process.exit(0);

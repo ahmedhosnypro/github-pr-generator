@@ -9,6 +9,7 @@ import {
   githubTokenInput,
   modelInput,
 } from "./elements";
+import { errorMessage } from "./messaging";
 import { diffLimitOrDefault } from "./save";
 import { markLoaded } from "./state";
 import { selectThinkingEffort, updateDiffConditionalVisibility } from "./ui";
@@ -31,16 +32,50 @@ function readFileConfig(): Promise<FileConfig | null> {
     .catch(() => null);
 }
 
-function readDirectStorage(): Promise<StoredConfig> {
+const STORAGE_READ_TIMEOUT_MS = 10_000; // same 10s bound as readFileConfig's abort probe
+
+/**
+ * Callback-style storage read with the popup's safety rails: a thrown call,
+ * a chrome.runtime.lastError, or a callback that never fires (extension
+ * context invalidated — the failure mode that left the popup stuck in the
+ * loading state until reopen) all resolve to an empty config so
+ * loadSettings always settles. Exported for the unit tests.
+ */
+export function readStorageWithTimeout(
+  get: (callback: (raw: Record<string, unknown>) => void) => void,
+  lastError: () => { message?: string } | undefined,
+  timeoutMs: number,
+): Promise<StoredConfig> {
   return new Promise((resolve) => {
-    try {
-      chrome.storage.local.get(STORAGE_KEYS, (raw: Record<string, unknown>) => {
-        resolve(raw);
-      });
-    } catch {
+    const fail = (reason: string): void => {
+      console.error("[PR Generator popup] storage read failed:", reason);
       resolve({});
+    };
+    const timer = setTimeout(() => {
+      fail("timed out after " + String(timeoutMs) + "ms");
+    }, timeoutMs);
+    try {
+      get((raw) => {
+        clearTimeout(timer);
+        const err = lastError();
+        if (err) fail(err.message ?? "unknown error");
+        else resolve(raw);
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      fail(errorMessage(e));
     }
   });
+}
+
+function readDirectStorage(): Promise<StoredConfig> {
+  return readStorageWithTimeout(
+    (callback) => {
+      chrome.storage.local.get(STORAGE_KEYS, callback);
+    },
+    () => chrome.runtime.lastError,
+    STORAGE_READ_TIMEOUT_MS,
+  );
 }
 
 function applyValues(stored: StoredConfig, fileConfig: FileConfig | null): void {
