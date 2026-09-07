@@ -95,13 +95,14 @@ const turbListener = (): void => {
   setTimeout(() => {
     // Turbo soft navigation can replace <body>; re-attach the observer to the
     // new body (it silently dies otherwise), then re-run id-guarded injections.
+    // Re-arm unconditionally — the late-mount fallback at init must survive
+    // navigations too, so a compare form that mounts after a soft navigation
+    // still gets its buttons via the observer.
     observer.disconnect();
-    if (isPRCreationPage() || isPROpenedPage() || isMergeConfirmationPage()) {
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-    }
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
     if (isPRCreationPage()) {
       injectButtons();
     }

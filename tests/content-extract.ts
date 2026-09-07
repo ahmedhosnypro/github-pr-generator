@@ -349,10 +349,6 @@ expectMatch("encoded compare head decoded", extractBranchContext().headBranch, "
 resetPage("https://github.com/octo/repo/compare/main...feature%zz");
 expectMatch("malformed percent-escape kept raw", extractBranchContext().headBranch, "feature%zz");
 
-// Malformed percent-escapes pass through unchanged instead of throwing.
-resetPage("https://github.com/octo/repo/compare/main...feature%zz");
-expectMatch("malformed percent-escape kept raw", extractBranchContext().headBranch, "feature%zz");
-
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

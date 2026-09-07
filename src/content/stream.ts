@@ -74,19 +74,38 @@ function wirePortHandlers<Result extends StreamedResult>(
  * content deltas via onChunk as they arrive. Resolves with the parsed result
  * carried by the final "done" port message; rejects on error/disconnect.
  */
+// Same stale-context handling as messaging.ts: an orphaned content script's
+// raw "Extension context invalidated" error is not actionable; the reload
+// hint is.
+const CONTEXT_INVALIDATED = /extension context invalidated/i;
+const RELOAD_HINT = "The extension was reloaded or updated — reload this page to reconnect.";
+
+function toStreamError(e: unknown): Error {
+  if (e instanceof Error && CONTEXT_INVALIDATED.test(e.message)) return new Error(RELOAD_HINT);
+  return e instanceof Error ? e : new Error(errorMessage(e));
+}
+
 export function streamFromBackground<Result extends StreamedResult>(
   request: StreamRequest,
   onChunk: (delta: string) => void,
 ): Promise<Result> {
   return new Promise<Result>((resolve, reject) => {
-    const port = chrome.runtime.connect({ name: STREAM_PORT_NAME });
+    let port: chrome.runtime.Port;
+    try {
+      // A dead extension context throws here, before postMessage — both must
+      // reject with the friendly reload hint, not the raw Chrome string.
+      port = chrome.runtime.connect({ name: STREAM_PORT_NAME });
+    } catch (e) {
+      reject(toStreamError(e));
+      return;
+    }
     const job: StreamJob = { port, settled: false, pingTimer: startKeepalive(port) };
     wirePortHandlers(job, onChunk, resolve, reject);
     try {
       port.postMessage(request);
     } catch (e) {
       settle(job, () => {
-        reject(e instanceof Error ? e : new Error(errorMessage(e)));
+        reject(toStreamError(e));
       });
     }
   });
