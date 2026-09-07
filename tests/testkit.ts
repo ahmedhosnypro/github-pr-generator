@@ -1,7 +1,9 @@
 import {
-  commitHeadlineWords,
   countCoveredCommits as countCoveredCommitsImpl,
+  coverageThreshold,
   commitHeadline as getCommitHeadlineImpl,
+  isCommitCovered,
+  listedCommits,
 } from "../src/background/commit-coverage";
 import type { FileChange, GhPrDetails, TestPrRef } from "./shared";
 import { fetchPRDetails, loadConfig, runGhCommand } from "./shared";
@@ -33,21 +35,35 @@ export function countCoveredCommits(commits: string[], text: string): number {
   return countCoveredCommitsImpl(commits, text);
 }
 
+// Scores coverage with the shipped scorer's semantics, not a re-implementation:
+// the judged universe is the prompt-listed subset (listedCommits) and matching
+// is isCommitCovered (trailing-"s" stemming, wordless-headline fallback).
 export function computeCoverageDetails(
   commits: string[],
   text: string,
 ): { covered: number; details: CoverageDetail[] } {
   const lowered = text.toLowerCase();
-  const details = commits.map((commit, i) => {
+  const listed = listedCommits(commits);
+  if (listed.length < commits.length) {
+    console.log(
+      `Coverage scored on the first ${String(listed.length)} listed commits of ${String(commits.length)} total.`,
+    );
+  }
+  const details = listed.map((commit, i) => {
     const headline = getCommitHeadline(commit);
-    const covered = commitHeadlineWords(commit).some((w) => lowered.includes(w));
-    return { commit: i + 1, headline, covered };
+    return { commit: i + 1, headline, covered: isCommitCovered(commit, lowered) };
   });
   return { covered: details.filter((d) => d.covered).length, details };
 }
 
-export function logCommitCoverageVerdict(coverage: number, coveragePercent: string): void {
-  if (coverage >= 90) {
+// Required coverage percent, matching the runtime refinement loop
+// (coverageThreshold): 90% up to 20 listed commits, declining to a 60% floor.
+export function requiredCoveragePercent(listedCommitCount: number): number {
+  return coverageThreshold(listedCommitCount) * 100;
+}
+
+export function logCommitCoverageVerdict(coverage: number, coveragePercent: string, requiredCoverage: number): void {
+  if (coverage >= requiredCoverage) {
     console.log(`\n✅ TEST PASSED: Excellent commit coverage (${coveragePercent}%)`);
   } else if (coverage >= 70) {
     console.log(`\n⚠️  TEST PARTIAL: Good commit coverage (${coveragePercent}%) - some commits not mentioned`);
@@ -56,11 +72,12 @@ export function logCommitCoverageVerdict(coverage: number, coveragePercent: stri
   }
 }
 
-// Logs the per-commit coverage lines and computes the percentage.
+// Logs the per-commit coverage lines and computes the percentage plus the
+// required coverage for this commit count (runtime coverageThreshold semantics).
 export function logCoverageBreakdown(
   header: string,
   details: CoverageDetail[],
-): { covered: number; coverage: number; coveragePercent: string } {
+): { covered: number; coverage: number; coveragePercent: string; requiredCoverage: number } {
   console.log(header);
   details.forEach((d) => {
     const status = d.covered ? "✓ COVERED" : "✗ MISSING";
@@ -69,7 +86,7 @@ export function logCoverageBreakdown(
   const covered = details.filter((d) => d.covered).length;
   const coverage = (covered / details.length) * 100;
   const coveragePercent = coverage.toFixed(1);
-  return { covered, coverage, coveragePercent };
+  return { covered, coverage, coveragePercent, requiredCoverage: requiredCoveragePercent(details.length) };
 }
 
 // Full "breakdown + SUMMARY + verdict" block used by the commit-coverage and
@@ -78,11 +95,13 @@ export function logCoverageVerdictBlock(
   header: string,
   summaryLabel: string,
   details: CoverageDetail[],
-): { covered: number; coverage: number; coveragePercent: string } {
+): { covered: number; coverage: number; coveragePercent: string; requiredCoverage: number } {
   const result = logCoverageBreakdown(header, details);
   console.log("\n=== SUMMARY ===");
-  console.log(`${summaryLabel}: ${String(result.covered)}/${String(details.length)} (${result.coveragePercent}%)`);
-  logCommitCoverageVerdict(result.coverage, result.coveragePercent);
+  console.log(
+    `${summaryLabel}: ${String(result.covered)}/${String(details.length)} (${result.coveragePercent}%, required: ${String(result.requiredCoverage)}%)`,
+  );
+  logCommitCoverageVerdict(result.coverage, result.coveragePercent, result.requiredCoverage);
   return result;
 }
 

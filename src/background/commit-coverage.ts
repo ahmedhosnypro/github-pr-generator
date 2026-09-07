@@ -46,7 +46,7 @@ function wordAppears(word: string, loweredText: string): boolean {
 // A headline with no >3-char word at all (emoji-only, "a b c") can never match
 // on words, so it falls back to a full-headline substring match — otherwise
 // such commits are mathematically uncoverable and silently sink the ratio.
-function isCommitCovered(commitMessage: string, loweredText: string): boolean {
+export function isCommitCovered(commitMessage: string, loweredText: string): boolean {
   const words = commitHeadlineWords(commitMessage);
   if (words.length > 0) return words.some((w) => wordAppears(w, loweredText));
   const headline = commitHeadline(commitMessage).trim();
