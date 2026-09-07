@@ -20,14 +20,35 @@ function applyTheme(theme: unknown): void {
 
 export function initTheme(): void {
   try {
-    chrome.storage.sync.get("theme", (result: Record<string, unknown>) => {
-      // Only a stored light/dark choice means the user overrode the system.
-      userOverrodeTheme = result.theme === "light" || result.theme === "dark";
-      applyTheme(result.theme);
+    chrome.storage.local.get("theme", (result: Record<string, unknown>) => {
+      if (result.theme === "light" || result.theme === "dark") {
+        userOverrodeTheme = true;
+        applyTheme(result.theme);
+        return;
+      }
+      migrateThemeFromSync();
     });
   } catch {
     applyTheme(null);
   }
+}
+
+// One-time migration: the theme preference lived in chrome.storage.sync while
+// every other popup preference is local. If sync still holds a value, seed
+// local with it and drop the stale sync copy.
+function migrateThemeFromSync(): void {
+  chrome.storage.sync.get("theme", (result: Record<string, unknown>) => {
+    if (result.theme === "light" || result.theme === "dark") {
+      userOverrodeTheme = true;
+      applyTheme(result.theme);
+      runSafe(() => {
+        void chrome.storage.local.set({ theme: result.theme });
+        void chrome.storage.sync.remove("theme");
+      }, "[PR Generator popup] Failed to migrate theme:");
+      return;
+    }
+    applyTheme(null);
+  });
 }
 
 export function toggleTheme(): void {
@@ -38,7 +59,7 @@ export function toggleTheme(): void {
   html.classList.remove(isDark ? "theme-dark" : "theme-light");
   html.classList.add("theme-" + newTheme);
   runSafe(() => {
-    void chrome.storage.sync.set({ theme: newTheme });
+    void chrome.storage.local.set({ theme: newTheme });
   }, "[PR Generator popup] Failed to save theme:");
 }
 

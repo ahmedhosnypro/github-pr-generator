@@ -192,6 +192,51 @@ async function testBackgroundDisconnectAbortsMidGeneration(): Promise<void> {
   }
 }
 
+async function testBackgroundDisconnectAbortsAllInFlightJobs(): Promise<void> {
+  const connect = connectListener();
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]): void => {
+    logs.push(args.map(String).join(" "));
+  };
+  try {
+    // One port, three concurrent generation jobs. The listener tracks each in
+    // its own AbortController (a Set per port), so ONE disconnect must abort
+    // every job still in flight — a shared controller or last-job bookkeeping
+    // would strand jobs 2 and 3 streaming into the void.
+    const port = new FakePort();
+    connect(port);
+    const callsBefore = generateCalls.length;
+    port.emitMessage({ type: "generate", data: {} });
+    port.emitMessage({ type: "generate", data: {} });
+    port.emitMessage({ type: "generate", data: {} });
+    await settleTicks();
+    expectMatch("all three jobs started on the one port", generateCalls.length, callsBefore + 3);
+    const [first, second, third] = [parkedCall(callsBefore), parkedCall(callsBefore + 1), parkedCall(callsBefore + 2)];
+    expectMatch("each job got its own signal", second.signal !== first.signal && third.signal !== first.signal, true);
+
+    // A job that already completed left the in-flight set, so it is NOT aborted.
+    first.resolve({ title: "done early", description: "" });
+    await settleTicks();
+
+    port.emitDisconnect();
+    expectMatch("completed job's signal untouched by disconnect", first.signal?.aborted ?? false, false);
+    expectMatch("second job aborted by the single disconnect", second.signal?.aborted, true);
+    expectMatch("third job aborted by the single disconnect", third.signal?.aborted, true);
+    expectMatch("abort log counts the remaining in-flight jobs", countLogs(logs, "aborting 2 in-flight job(s)"), 1);
+
+    // Both aborted jobs settle with abort-style rejections: logged as
+    // intentional cancels, never posted to the dead port.
+    second.reject(new Error("The operation was aborted"));
+    third.reject(new Error("The operation was aborted"));
+    await settleTicks();
+    expectMatch("both aborted rejections logged", countLogs(logs, "stream request aborted (generate)"), 2);
+    expectMatch("no error posts for any aborted job", port.errorPosts().length, 0);
+  } finally {
+    console.log = originalLog;
+  }
+}
+
 async function testBackgroundDisconnectWithoutJob(): Promise<void> {
   const connect = connectListener();
   const logs: string[] = [];
@@ -283,6 +328,7 @@ await testBackgroundKeepalive();
 await testBackgroundUnknownRequest();
 await testBackgroundCompletes();
 await testBackgroundDisconnectAbortsMidGeneration();
+await testBackgroundDisconnectAbortsAllInFlightJobs();
 await testBackgroundDisconnectWithoutJob();
 await testBackgroundReconnectFreshController();
 

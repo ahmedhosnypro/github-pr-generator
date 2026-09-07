@@ -123,7 +123,7 @@ export function validateConfig(config: ExtensionConfig): string | null {
 function isLoopbackHostname(hostname: string): boolean {
   const host = hostname.toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // The URL parser normalizes IPv4 literals, so a "127." prefix covers [IP_REDACTED]/8.
+  // The URL parser normalizes IPv4 literals, so a "127." prefix covers 127.0.0.0/8.
   if (host.startsWith("127.")) return true;
   return host === "[::1]";
 }
