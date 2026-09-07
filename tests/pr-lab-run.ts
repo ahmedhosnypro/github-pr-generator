@@ -8,7 +8,7 @@
 // with /pulls/<n> fallback for deleted head branches), and anchors are
 // hydrated with hydrateMissingDiffAnchors exactly as handleGenerateDescription
 // does before building the summary.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hydrateMissingDiffAnchors } from "../src/background/anchor-hash";
 import { discoverRepoStyle } from "../src/background/github/discovery";
 import { buildStats, extractLinkedIssues, gatherPRData } from "../src/background/handlers/shared";
@@ -86,13 +86,19 @@ function readStyleCache(): StyleCacheTable {
 
 async function discoverRepoStyleCached(config: ExtensionConfig, owner: string, repo: string): Promise<RepoStyle> {
   const key = owner.toLowerCase() + "/" + repo.toLowerCase();
-  const table = readStyleCache();
-  const hit = table[key];
+  const hit = readStyleCache()[key];
   if (hit && Date.now() - hit.at < STYLE_CACHE_TTL_MS) return hit.style;
   const style = await discoverRepoStyle(config, owner, repo);
-  table[key] = { at: Date.now(), style };
   try {
-    writeFileSync(STYLE_CACHE_FILE, JSON.stringify(table));
+    // pr-lab-parallel runs many repos concurrently: re-read right before
+    // writing so entries cached by other runs during our GitHub fetch
+    // survive, and write via tmp+rename so concurrent readers never see a
+    // torn cache file.
+    const table = readStyleCache();
+    table[key] = { at: Date.now(), style };
+    const tmp = STYLE_CACHE_FILE + "." + String(process.pid) + ".tmp";
+    writeFileSync(tmp, JSON.stringify(table));
+    renameSync(tmp, STYLE_CACHE_FILE);
   } catch {
     // cache writes are best-effort — a read-only workspace just skips caching
   }
