@@ -1,39 +1,12 @@
 // Unit tests for fetchPRCommits / fetchPRFiles (src/background/github/list-pages.ts):
-// prNumber validation guards and happy-path pagination/mapping.
-// Mocks global fetch — no real network.
+// prNumber validation guards, happy-path pagination/mapping, and the MAX_PAGES
+// truncation warning. Mid-pagination degrade coverage lives in
+// tests/pr-lists-partial.ts. Mocks global fetch — no real network.
 import { fetchPRCommits, fetchPRFiles } from "../src/background/github/list-pages";
-import type { ExtensionConfig } from "../src/types";
-import { expectMatch, getFailures } from "./expect-helpers";
-
-const BASE_CONFIG: ExtensionConfig = {
-  apiEndpoint: "https://probe.invalid/v1",
-  apiKey: "k",
-  model: "m",
-  githubToken: "gh-token",
-  diffEnabled: false,
-  diffMaxLines: 10,
-  diffMaxBytes: 100,
-  thinkingEffort: "default",
-};
-
-type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-function jsonResponse(payload: object, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
-}
-
-function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
-  const original = globalThis.fetch;
-  globalThis.fetch = impl as typeof fetch;
-  return fn().finally(() => {
-    globalThis.fetch = original;
-  });
-}
-
-function urlString(url: string | URL | Request): string {
-  if (typeof url === "string") return url;
-  return url instanceof URL ? url.href : url.url;
-}
+import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
+import type { FetchImpl } from "./pr-lists-helpers";
+import { BASE_CONFIG, fullCommitPage, jsonResponse, urlString, withCapturedLogs, withFetch } from "./pr-lists-helpers";
+import { runPartialPaginationTests } from "./pr-lists-partial";
 
 // (1) fetchPRCommits with invalid prNumber → GITHUB_INVALID_CONTEXT, fetch never called.
 async function testCommitsInvalidPrNumber(): Promise<void> {
@@ -186,21 +159,30 @@ async function testInvalidOwnerRepo(): Promise<void> {
 }
 
 // (6c) Pagination is bounded: a server that always returns full pages stops
-// at MAX_PAGES (10 × 100 items) instead of looping forever.
+// at MAX_PAGES (10 × 100 items) instead of looping forever, and the log
+// carries a clear truncation warning (counts, cap, GitHub's own 3000 cap).
 async function testPaginationBounded(): Promise<void> {
   let calls = 0;
-  const fullPage = () => jsonResponse(Array.from({ length: 100 }, () => ({ commit: { message: "m" } })));
-  await withFetch(
-    () => {
-      calls++;
-      return Promise.resolve(fullPage());
-    },
-    async () => {
-      const out = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42");
-      expectMatch("bounded pagination stops at 10 pages", calls, 10);
-      expectMatch("bounded pagination returns 10x100 commits", "commits" in out && out.commits.length, 1000);
-    },
-  );
+  let length = -1;
+  const logs = await withCapturedLogs(async () => {
+    await withFetch(
+      () => {
+        calls++;
+        return Promise.resolve(fullCommitPage());
+      },
+      async () => {
+        const out = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42");
+        length = "commits" in out ? out.commits.length : -1;
+      },
+    );
+  });
+  expectMatch("bounded pagination stops at 10 pages", calls, 10);
+  expectMatch("bounded pagination returns 10x100 commits", length, 1000);
+  const combined = logs.join("\n");
+  expectIncludes("cap hit logs a TRUNCATED warning", combined, "TRUNCATED PR commits");
+  expectIncludes("truncation log names the cap", combined, "10-page cap");
+  expectIncludes("truncation log includes the fetched count", combined, "fetched 1000 items");
+  expectIncludes("truncation log explains GitHub's own cap", combined, "3000");
 }
 
 // (7) Timeout: fetch rejects with the DOMException AbortSignal.timeout would
@@ -236,6 +218,7 @@ async function main(): Promise<void> {
   await testInvalidOwnerRepo();
   await testPaginationBounded();
   await testCommitsFetchTimeout();
+  await runPartialPaginationTests();
 
   const failures = getFailures();
   if (failures > 0) {

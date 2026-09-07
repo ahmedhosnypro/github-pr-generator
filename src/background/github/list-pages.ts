@@ -20,8 +20,8 @@ interface PageListResult<T> {
   items: T[];
 }
 
-// GitHub caps the PR files listing at 3000 entries and commits at 250, so 10
-// pages × 100 covers every real response. The bound also keeps a pathological
+// GitHub caps the PR files listing at 3000 entries, so 10 pages × 100 covers
+// everything GitHub will actually return. The bound also keeps a pathological
 // server (always-full pages) from looping forever.
 const MAX_PAGES = 10;
 
@@ -75,6 +75,12 @@ async function fetchPage(
 
 // Paginates a GitHub REST list endpoint (100 per page, stops on a short page),
 // with identical logging and error handling for the commits/files listings.
+//
+// Failure contract: a first-page failure fails loudly as GITHUB_* error and the
+// caller (handlers/shared.ts) logs it and generates without this section. A
+// failure partway through degrades instead — the pages already fetched are
+// returned so the prompt loses only the missing tail, and the log records
+// exactly what was kept and what failed.
 async function fetchAllPages<TMapped>(
   config: ExtensionConfig,
   baseUrl: string,
@@ -83,16 +89,34 @@ async function fetchAllPages<TMapped>(
 ): Promise<PageListResult<TMapped> | GitHubErrorResult> {
   const headers = makeGitHubHeaders(config);
 
+  let allItems: TMapped[] = [];
+  let page = 1;
   try {
-    let allItems: TMapped[] = [];
-    let page = 1;
     const perPage = 100; // Max per page for GitHub API
     let hasMore = true;
 
     while (hasMore && page <= MAX_PAGES) {
       // oxlint-disable-next-line no-await-in-loop -- each GitHub page depends on the previous response; pagination must stay sequential
       const pageResult = await fetchPage(headers, baseUrl, label, page, perPage);
-      if (!Array.isArray(pageResult)) return pageResult;
+      if (!Array.isArray(pageResult)) {
+        if (allItems.length > 0) {
+          logMsg(
+            label +
+              " page " +
+              String(page) +
+              " failed (" +
+              pageResult.error +
+              (pageResult.status ? ", status " + String(pageResult.status) : "") +
+              ") after " +
+              String(allItems.length) +
+              " items from " +
+              String(page - 1) +
+              " page(s); keeping the partial list",
+          );
+          return { items: allItems };
+        }
+        return pageResult;
+      }
 
       const noun = label.replace(/^PR /, "").toLowerCase();
       logMsg("Page " + String(page) + " returned " + String(pageResult.length) + " " + noun);
@@ -112,15 +136,57 @@ async function fetchAllPages<TMapped>(
     }
 
     if (hasMore && page > MAX_PAGES) {
-      logMsg(label + " pagination stopped at the " + String(MAX_PAGES) + "-page cap (truncated results)");
+      // Not silent: a truncated file/commit list changes the generated PR text,
+      // so the log gets counts, the cap, and why capping is safe.
+      logMsg(
+        "TRUNCATED " +
+          label +
+          ": fetched " +
+          String(allItems.length) +
+          " items across " +
+          String(MAX_PAGES) +
+          " pages and hit the " +
+          String(MAX_PAGES) +
+          "-page cap (" +
+          String(MAX_PAGES * 100) +
+          " items); remaining pages skipped. " +
+          "GitHub itself caps these listings per PR (3000 files), so anything past the cap is reported partially.",
+      );
     }
 
     logMsg("Total " + label + " fetched across all pages: " + String(allItems.length));
     return { items: allItems };
   } catch (fetchErr) {
-    logMsg("GitHub API fetch error (" + label + "): " + errorMessage(fetchErr));
-    return { error: "GITHUB_NETWORK_ERROR", message: errorMessage(fetchErr) };
+    return handleFetchFailure(label, fetchErr, allItems, page);
   }
+}
+
+// A fetch/network throw mid-pagination keeps the pages already fetched
+// (same degrade rule as HTTP errors); with nothing fetched yet it fails
+// loudly as GITHUB_NETWORK_ERROR, as before.
+function handleFetchFailure<TMapped>(
+  label: string,
+  fetchErr: unknown,
+  allItems: TMapped[],
+  page: number,
+): PageListResult<TMapped> | GitHubErrorResult {
+  if (allItems.length > 0) {
+    logMsg(
+      label +
+        " fetch failed mid-pagination on page " +
+        String(page) +
+        " (" +
+        errorMessage(fetchErr) +
+        "); keeping " +
+        String(allItems.length) +
+        " items from " +
+        String(page - 1) +
+        " page(s)",
+    );
+    return { items: allItems };
+  }
+  logMsg("GitHub API fetch error (" + label + "): " + errorMessage(fetchErr));
+  return { error: "GITHUB_NETWORK_ERROR", message: errorMessage(fetchErr) };
 }
 
 function mapCommitItem(raw: unknown): CommitInfo {

@@ -12,9 +12,17 @@ import {
 } from "./common";
 import { parseHunkLineRanges, truncateDiff } from "./diff-parse";
 
-async function diffFailure(response: Response): Promise<GitHubErrorResult | null> {
+async function diffFailure(response: Response, hasToken: boolean): Promise<GitHubErrorResult | null> {
   if (response.status === 404) {
-    logMsg("GitHub API 404 - repo/compare not found (may need PAT for private repo)");
+    // With a token configured, a 404 means the base/head ref or repo itself is
+    // gone — pointing the user at a PAT would send them chasing the wrong fix.
+    if (hasToken) {
+      logMsg(
+        "GitHub API 404 - compare/pull not found (base/head branch deleted or repo moved); token is configured, so this is not an auth issue",
+      );
+    } else {
+      logMsg("GitHub API 404 - repo/compare not found (may need PAT for private repo)");
+    }
     return { error: "GITHUB_404" };
   }
 
@@ -42,7 +50,7 @@ function buildDiffHeaders(config: ExtensionConfig): Record<string, string> {
 }
 
 async function processDiffResponse(config: ExtensionConfig, response: Response): Promise<GitHubDiffResult> {
-  const failure = await diffFailure(response);
+  const failure = await diffFailure(response, Boolean(config.githubToken));
   if (failure) return failure;
 
   const diffText = await response.text();
