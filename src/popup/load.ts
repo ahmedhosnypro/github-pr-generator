@@ -12,7 +12,7 @@ import {
 import { diffLimitOrDefault } from "./save";
 import { markLoaded } from "./state";
 import { selectThinkingEffort, updateDiffConditionalVisibility } from "./ui";
-import { autoValidateEndpoint } from "./validate";
+import { autoValidateEndpoint, updateInsecureEndpointWarning } from "./validate";
 
 const STORAGE_KEYS = [
   "apiEndpoint",
@@ -76,6 +76,10 @@ export function loadSettings(): void {
         (fileConfig ? "present" : "none"),
     );
     applyValues(direct, fileConfig);
+    // Pure DOM update, not tied to the permission-gated probe below: a
+    // non-loopback plain-HTTP endpoint must warn even without host permission
+    // (autoValidateEndpoint skips validateEndpoint entirely in that case).
+    updateInsecureEndpointWarning();
     // Probe reachability without the API key; autoValidateEndpoint bails out
     // when the URL is invalid or host permission is absent, and the probe
     // itself never carries the key — only the explicit Test buttons do.
