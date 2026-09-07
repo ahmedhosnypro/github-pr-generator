@@ -4,6 +4,7 @@
 import { callAPI } from "../src/background/llm";
 import { countDiffAnchors, parseCombinedResponse } from "../src/background/parse";
 import { buildCombinedPrompt } from "../src/background/prompts/combined";
+import { renderedLineLength } from "../src/background/refinement-checks";
 import { buildChangesSummary } from "../src/background/summary";
 import type { ExtensionConfig } from "../src/types";
 import { renderedLineLength } from "../src/background/refinement-checks";

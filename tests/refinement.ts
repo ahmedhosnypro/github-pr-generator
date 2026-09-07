@@ -5,7 +5,7 @@ import {
   missingAuthoredSentences,
   wrapLongProseLines,
 } from "../src/background/description-normalize";
-import { scoreDescription } from "../src/background/refinement-checks";
+import { renderedLineLength, scoreDescription } from "../src/background/refinement-checks";
 import { expectMatch, getFailures } from "./expect-helpers";
 import { FULL_DESCRIPTION, LARGE_STATS, SMALL_STATS } from "./refinement-shared";
 
@@ -15,30 +15,26 @@ async function testAnchorGating(): Promise<void> {
 
   const withAnchors = await scoreDescription(noAnchorDescription, [], false);
   expectMatch(
-    "anchor check skipped when no anchors exist",
+    "anchor check skipped without anchors",
     withAnchors.failures.some((f) => f.check === "anchors"),
     false,
   );
 
   const demanded = await scoreDescription(noAnchorDescription, [], true);
   expectMatch(
-    "anchor failure reported when anchors exist",
+    "anchor failure fires when anchors exist",
     demanded.failures.some((f) => f.check === "anchors"),
     true,
   );
   expectMatch("skipping the check yields one fewer max point", withAnchors.maxScore, demanded.maxScore - 1);
   expectMatch(
-    "skipping the check clears the unfixable anchor failure",
+    "skip clears the anchor failure",
     withAnchors.failures.length === 0 && demanded.failures.length > 0,
     true,
   );
 
   const good = await scoreDescription(FULL_DESCRIPTION, [], true);
-  expectMatch(
-    "complete description passes all checks",
-    good.failures.length === 0 && good.score === good.maxScore,
-    true,
-  );
+  expectMatch("full description passes all checks", good.failures.length === 0 && good.score === good.maxScore, true);
 
   // The anchor floor scales with file count (mirroring tests/pr-lab-rubric.ts),
   // so a 1-file PR isn't forced to duplicate links to reach 3.
@@ -63,14 +59,14 @@ async function testProportionalSize(): Promise<void> {
   const padded = `${FULL_DESCRIPTION}\n\n${"filler words to inflate this description far beyond what a small diff needs ".repeat(20)}`;
   const bloated = await scoreDescription(padded, [], false, SMALL_STATS);
   expectMatch(
-    "oversized description for small diff flagged",
+    "oversized small-diff description flagged",
     bloated.failures.some((f) => f.check === "proportionalSize"),
     true,
   );
   expectMatch("proportional check adds one point to max", bloated.maxScore, 12);
   const compact = await scoreDescription("## Summary\nFixed the config path.", [], false, SMALL_STATS);
   expectMatch(
-    "compact description escapes size flag",
+    "compact description escapes size cap",
     compact.failures.some((f) => f.check === "proportionalSize"),
     false,
   );
@@ -92,15 +88,10 @@ async function testProportionalSize(): Promise<void> {
 async function testSmallDiffLeniency(): Promise<void> {
   const compact = "## Summary\nFixed the token expiry race.\n\nScope: 1 file, +5/-2";
   const lenient = await scoreDescription(compact, [], false, SMALL_STATS);
+  const scaffoldChecks = new Set(["boldLabelBullets", "testingSteps", "fences", "testingFormat"]);
   expectMatch(
     "small diff: missing scaffolding is fine",
-    lenient.failures.every(
-      (f) =>
-        f.check !== "boldLabelBullets" &&
-        f.check !== "testingSteps" &&
-        f.check !== "fences" &&
-        f.check !== "testingFormat",
-    ),
+    lenient.failures.every((f) => !scaffoldChecks.has(f.check)),
     true,
   );
   const strictOnLarge = await scoreDescription(compact, [], false, LARGE_STATS);
@@ -120,11 +111,8 @@ async function testSmallDiffLeniency(): Promise<void> {
   // A "## Verification" section is an accepted synonym for "## Testing".
   const verified = FULL_DESCRIPTION.replace("## Testing", "## Verification");
   const verifiedScore = await scoreDescription(verified, [], false, LARGE_STATS);
-  expectMatch(
-    "verification alias satisfies testing checks",
-    verifiedScore.failures.every((f) => f.check !== "testingSteps" && f.check !== "testingFormat"),
-    true,
-  );
+  const testingOk = verifiedScore.failures.every((f) => f.check !== "testingSteps" && f.check !== "testingFormat");
+  expectMatch("verification alias satisfies testing checks", testingOk, true);
 }
 
 // Prose wrapping: long one-line paragraphs are split at sentence boundaries,
@@ -143,11 +131,7 @@ function testProseWrap(): void {
     lines.every((l) => l.length <= 400),
     true,
   );
-  expectMatch(
-    "wrapping preserves the text (only newlines collapse to spaces)",
-    wrapped.replace(/\n+/g, " ").includes(longLine.trim()),
-    true,
-  );
+  expectMatch("wrap only collapses newlines", wrapped.replace(/\n+/g, " ").includes(longLine.trim()), true);
 
   const structural = "- a bullet that is long but untouched\n".repeat(12);
   expectMatch("bullet lines never wrapped", wrapLongProseLines(structural), structural);
@@ -187,47 +171,47 @@ async function testArtifactEnding(): Promise<void> {
   expectMatch("existing artifact ending kept verbatim", ensureArtifactEnding(alreadyGood, stats), alreadyGood);
   expectMatch("no stats, no append", ensureArtifactEnding(badEnding, null), badEnding);
   expectMatch(
-    "zero-file stats, no append",
+    "no append for zero files",
     ensureArtifactEnding(badEnding, { files: 0, additions: 0, deletions: 0 }),
     badEnding,
   );
 }
 
-// Commit coverage: word-match semantics + the scaled threshold curve.
-async function testCommitCoverage(): Promise<void> {
+// Commit coverage word-match semantics, driven as a table:
+// [name, headline(s), description text, expected covered count]. Matching
+// tolerates punctuation tokenization, Unicode (RTL/CJK) tokens, and a
+// trailing-"s" stem for paraphrases like "plans" → "planning".
+function testCoverageWordMatch(): void {
   const msgList = ["fix(auth): refresh token race", "docs: update readme", "chore: bump deps"];
-  expectMatch(
-    "headline word matches count coverage",
-    countCoveredCommits(msgList, "Fixes the token race in auth code."),
-    1,
-  );
-  expectMatch(
-    "long message body words ignored (headline only)",
-    countCoveredCommits(["fix: x\n\nbody elaboration details"], "details"),
-    0,
-  );
-  expectMatch("short words (<4 chars) do not count", countCoveredCommits(["fix a bug"], "a bug"), 0);
-  expectMatch(
-    "headline punctuation tokenizes (brackets/hyphens/colons split)",
-    countCoveredCommits(["docs(dev1-006): add prototype assets and catalog"], "adds `prototype assets` docs"),
-    1,
-  );
-  expectMatch(
-    "plural headline stem covered by derived form in text",
-    countCoveredCommits(["plans"], "Adds sprint planning artifacts."),
-    1,
-  );
-  expectMatch(
-    "stemming is not a fake-cover for unrelated text",
-    countCoveredCommits(["plans"], "discusses authentication flow only"),
-    0,
-  );
-  expectMatch(
-    "word-less headline falls back to full-headline match",
-    countCoveredCommits(["a b c"], "mentions a b c verbatim"),
-    1,
-  );
-  expectMatch("word-less headline still misses when absent", countCoveredCommits(["a b c"], "unrelated text"), 0);
+  const cases: Array<[string, string[], string, number]> = [
+    ["headline word matches count coverage", msgList, "Fixes the token race in auth code.", 1],
+    ["long message body words ignored (headline only)", ["fix: x\n\nbody elaboration details"], "details", 0],
+    ["short words (<4 chars) do not count", ["fix a bug"], "a bug", 0],
+    ["punctuation splits headline tokens", ["docs(dev1-006): add prototype assets"], "adds `prototype assets` docs", 1],
+    [
+      "tokenized headline misses unrelated text",
+      ["docs(dev1-006): add prototype assets"],
+      "rewrites the billing pipeline",
+      0,
+    ],
+    ["plural headline stem covered by derived form", ["plans"], "Adds sprint planning artifacts.", 1],
+    ["stemming is not a fake-cover for unrelated text", ["plans"], "discusses authentication flow only", 0],
+    ["singular headline word matches its plural in text", ["plan"], "updates the plans section", 1],
+    ["stem too short (api from apis) does not match", ["apis"], "uses the api layer", 0],
+    ["RTL (Arabic) headline covered by quoted words", ["إصلاح مشكلة تسجيل الدخول"], "أصلحنا مشكلة تسجيل الدخول", 1],
+    ["RTL (Arabic) headline missed when absent", ["إصلاح مشكلة تسجيل الدخول"], "reworks the caching layer only", 0],
+    ["CJK headline covered by quoted headline", ["修复登录过期导致的问题"], "本次发布包含修复登录过期导致的问题。", 1],
+    ["CJK headline missed when text differs", ["修复登录过期导致的问题"], "优化了列表页面的渲染性能。", 0],
+    ["word-less headline falls back to full-headline match", ["a b c"], "mentions a b c verbatim", 1],
+    ["word-less headline still misses when absent", ["a b c"], "unrelated text", 0],
+  ];
+  for (const [name, commits, text, expected] of cases) {
+    expectMatch(name, countCoveredCommits(commits, text), expected);
+  }
+}
+
+// Commit coverage: the scaled threshold curve and the listed-subset regression.
+async function testCommitCoverage(): Promise<void> {
   expectMatch("threshold: ≤20 commits requires 90%", coverageThreshold(10), 0.9);
   expectMatch("threshold: 122 commits declines to the 60% floor", coverageThreshold(122), 0.6);
   expectMatch("threshold: 80 commits is 0.6 via linear decline", coverageThreshold(80), 0.6);
@@ -238,17 +222,52 @@ async function testCommitCoverage(): Promise<void> {
   // was mathematically unreachable.
   const manyCommits = Array.from({ length: 300 }, (_, i) => `feat: implement gadget${String(i)} module`);
   const coveredNames = Array.from({ length: 100 }, (_, i) => "gadget" + String(i)).join(" ");
-  const covering = "Ships " + coveredNames + ".";
-  const scoredEnough = await scoreDescription(covering, manyCommits, false);
+  const scoredEnough = await scoreDescription("Ships " + coveredNames + ".", manyCommits, false);
   expectMatch(
-    "60% of the 150 listed commits satisfies coverage on a 300-commit PR",
+    "60% of 150 listed commits satisfies coverage",
     scoredEnough.failures.every((f) => f.check !== "commitCoverage"),
     true,
   );
-  const underCovered = await scoreDescription(`Ships gadget0 only.`, manyCommits, false);
+  const underCovered = await scoreDescription("Ships gadget0 only.", manyCommits, false);
   expectMatch(
     "thin coverage on the listed subset still fails",
     underCovered.failures.some((f) => f.check === "commitCoverage" && f.detail.includes("1/150")),
+    true,
+  );
+}
+
+// lineLength is judged on rendered markdown, not raw source: link payloads
+// (diffhunk anchors) are invisible in the PR body and must not count toward
+// the 400/600 prose-wall limits.
+async function testRenderedLineLength(): Promise<void> {
+  const plain = "plain prose without links";
+  expectMatch("plain line length unchanged", renderedLineLength(plain), plain.length);
+  const linked = "refresh [[1]](diffhunk://#diff-aaaa_L1-R2) early";
+  expectMatch("link payload excluded from rendered length", renderedLineLength(linked), "refresh [[1]] early".length);
+  expectMatch("multiple link payloads stripped", renderedLineLength("[[1]](x) and [[2]](y)"), "[[1]] and [[2]]".length);
+
+  // Integration: the 639-raw/184-rendered incident shape — an anchor-stuffed
+  // bullet is raw-huge but renders short, so it must pass lineLength.
+  const payload = `[[1]](diffhunk://#diff-${"a".repeat(40)}_L10-R20)`;
+  const heavyBullet = `- **Links** — wires the panel ${(payload + " ").repeat(12).trim()}`;
+  expectMatch(
+    "fixture bullet raw >600, rendered ≤600",
+    heavyBullet.length > 600 && renderedLineLength(heavyBullet) <= 600,
+    true,
+  );
+  const heavyDesc = `## Summary\nWires the panel.\n\n## Changes\n${heavyBullet}\n\nScope: 1 file, +5/-2`;
+  const heavy = await scoreDescription(heavyDesc, [], false, SMALL_STATS);
+  expectMatch(
+    "anchor-stuffed bullet passes",
+    heavy.failures.every((f) => f.check !== "lineLength"),
+    true,
+  );
+
+  const wallDesc = `## Summary\nPads a bullet.\n\n## Changes\n- ${"verbiage ".repeat(80).trim()}\n\nScope: 1 file, +5/-2`;
+  const walled = await scoreDescription(wallDesc, [], false, SMALL_STATS);
+  expectMatch(
+    "rendered-long bullet fails lineLength",
+    walled.failures.some((f) => f.check === "lineLength"),
     true,
   );
 }
@@ -259,17 +278,7 @@ async function testCommitCoverage(): Promise<void> {
 async function testOpenerDeadZone(): Promise<void> {
   const opener = `Fixed ${"the token expiry race condition ".repeat(11)}for good.`; // 373 chars
   expectMatch("opener sits in the old dead zone", opener.length > 300 && opener.length <= 390, true);
-  const desc = [
-    "## Summary",
-    opener,
-    "",
-    "## Changes",
-    "- **Auth** — refresh early [[1]](diffhunk://#diff-aaaa_L1-R2)",
-    "- **Gate** — block stale [[2]](diffhunk://#diff-bbbb_L1-R2)",
-    "- **Tests** — add coverage [[3]](diffhunk://#diff-cccc_L1-R2)",
-    "",
-    "Scope: 3 files, +10/-2",
-  ].join("\n");
+  const desc = FULL_DESCRIPTION.replace("Fixed the token expiry race by refreshing before each request.", opener);
   const stats = { files: 3, additions: 10, deletions: 2 };
   expectMatch(
     "dead-zone opener passes the opener check",
@@ -333,7 +342,9 @@ async function main(): Promise<void> {
   await testSmallDiffLeniency();
   testProseWrap();
   await testArtifactEnding();
+  testCoverageWordMatch();
   await testCommitCoverage();
+  await testRenderedLineLength();
   await testOpenerDeadZone();
   await testAnchorSupplyCap();
   testAuthoredSentenceGuard();
