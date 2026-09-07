@@ -13,14 +13,42 @@ import { log } from "./log";
 //      25s resets its idle timer and keeps the channel open.
 //   2. One retry: if the channel still drops (SW was already gone), the call
 //      is retried once — the second attempt wakes a fresh SW.
-//   3. Overall timeout (SEND_TIMEOUT_MS): if the response is simply lost, the
-//      promise rejects instead of leaving the UI pending forever.
+//   3. Overall timeout: if the response is simply lost, the promise rejects
+//      instead of leaving the UI pending forever. The window is per message
+//      class (see resolveTimeoutMs) and can be overridden per call.
 
 // Keepalive resets the SW idle timer but cannot help a genuinely lost call
 // (SW crash, wedged channel): without an overall cap the UI would wait
 // forever, so reject outright once the window is exhausted. Generous because
 // non-streamed calls can span a slow LLM response.
 const SEND_TIMEOUT_MS = 5 * 60 * 1000;
+
+// Generation messages await a full non-streamed LLM call on the background,
+// which is bounded by progress (stall watchdog + no-content budget), not by a
+// fixed deadline: a healthy slow run can legitimately outlast SEND_TIMEOUT_MS,
+// and capping it at that window produced false "No response from background"
+// failures while generation was still running. The longer cap only guards a
+// genuinely lost response — the background's own budgets still abort anything
+// that has actually stalled.
+const GENERATION_TIMEOUT_MS = 30 * 60 * 1000;
+
+const GENERATION_MESSAGE_TYPES: ReadonlySet<ExtensionMessage["type"]> = new Set([
+  "generate",
+  "generateTitle",
+  "generateDescription",
+  "generateMergeTitle",
+  "generateMergeDescription",
+]);
+
+export interface SendToBackgroundOptions {
+  // Per-call override; when set it wins over both the default and the
+  // generation-class window.
+  timeoutMs?: number;
+}
+
+export function resolveTimeoutMs(message: ExtensionMessage, overrideMs?: number): number {
+  return overrideMs ?? (GENERATION_MESSAGE_TYPES.has(message.type) ? GENERATION_TIMEOUT_MS : SEND_TIMEOUT_MS);
+}
 
 interface PendingCall<R> {
   message: ExtensionMessage;
@@ -31,18 +59,22 @@ interface PendingCall<R> {
   timeoutTimer: ReturnType<typeof setTimeout> | null;
 }
 
-export function sendToBackground<R>(message: ExtensionMessage): Promise<R | MessageErrorResponse> {
+export function sendToBackground<R>(
+  message: ExtensionMessage,
+  options?: SendToBackgroundOptions,
+): Promise<R | MessageErrorResponse> {
   return new Promise((resolve, reject) => {
     const call: PendingCall<R> = { message, resolve, reject, done: false, pingTimer: null, timeoutTimer: null };
+    const timeoutMs = resolveTimeoutMs(message, options?.timeoutMs);
     // Ping every 25s while outstanding to reset the SW idle timer.
     call.pingTimer = startKeepalive(call);
     call.timeoutTimer = setTimeout(() => {
       if (call.done) return;
       clearTimers(call);
       call.done = true;
-      log("error", "sendToBackground timed out after " + String(SEND_TIMEOUT_MS / 1000) + "s (" + message.type + ")");
-      call.reject(new Error("No response from background within " + String(SEND_TIMEOUT_MS / 1000) + "s"));
-    }, SEND_TIMEOUT_MS);
+      log("error", "sendToBackground timed out after " + String(timeoutMs / 1000) + "s (" + message.type + ")");
+      call.reject(new Error("No response from background within " + String(timeoutMs / 1000) + "s"));
+    }, timeoutMs);
     attemptSend(call, 1);
   });
 }
