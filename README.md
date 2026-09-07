@@ -27,6 +27,7 @@ A Chrome extension that generates pull request titles and descriptions using any
 
 - Works with any OpenAI-compatible API endpoint
 - Streams the model's response and fills the PR title/description live as tokens arrive (with a non-streaming fallback for endpoints that ignore `stream: true`)
+- Content-based stream timeouts: generation aborts after 60s with no response bytes at all (stall watchdog), or after a no-content budget — 5 minutes minimum, scaled up with prompt size to a 10-minute cap — when only empty keepalive frames arrive; there is no overall time cap while real tokens keep flowing, so slow healthy streams are never cut off
 - Built-in log panel for debugging (copy logs to clipboard)
 - Configurable via `config.local.json` or modern extension popup (Material Design 3, dark mode, theme toggle, test buttons)
 - Circuit breaker: validates config before making API calls
@@ -225,7 +226,7 @@ Only the fetch-based suite needs configuration. Add a `testPr` section to your `
 
 ### Running Tests
 
-The offline suite (`bun run test`) chains twenty suites that never touch the network, `gh`, or `config.local.json`: **logic** (prompt wording, mirror drift), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **refinement** (quality-loop scorer), **diff-parse** (hunk extraction), **config-save** (popup → SW config write), **config-resolve** (stored ↔ file config merge, NaN guard), **pr-update** (GitHub title/body write path via mock fetch), **discovery** (repo-style cache and PR-template discovery), **llm** (callAPI via mock fetch), **sse** (incremental stream parser), **stream-render** (live-preview helpers), **rubric** (acceptance-gate checks), **linkify** (URL resolution from diffhunk markers), **popup-text** (popup URL text helpers), **common** (repo-name / PR-number validation guards), **diff-fetch** (PR diff retrieval via mock fetch), and **pr-lists** (commit/file list pagination).
+The offline suite (`bun run test`) chains thirty-four suites that never touch the network, `gh`, or `config.local.json`: **logic** (prompt wording, mirror drift, prompt-budget cap), **parse** (bot-signature stripping, template preservation), **format** (render-quality contract), **stream** (SSE parsing), **style** (repo-style inference), **refinement** (quality-loop scorer, fences, scoring), **diff-parse** (hunk extraction), **config-save** (popup → SW config write), **config-resolve** (stored ↔ file config merge, NaN guard), **pr-update** (GitHub title/body write path via mock fetch), **discovery** (repo-style cache and PR-template discovery), **llm** (callAPI via mock fetch; stall watchdog, no-content budget, retries), **sse** (incremental stream parser), **stream-render** (live-preview helpers), **rubric** (acceptance-gate checks), **linkify** (URL resolution from diffhunk markers), **popup-text** (popup URL text helpers), **common** (repo-name / PR-number validation guards), **diff-fetch** (PR diff retrieval via mock fetch), **pr-lists** (commit/file list pagination), **handlers** (background generate/title/description/merge handlers under mocked chrome/fetch), **routing** (message dispatch to the right handler, keepalive answers), **port-stream** (long-lived port streaming channel — content and background sides, disconnect abort), **refinement-loop** (loop target clamping, regression-keep, abort semantics), **validate-config** (pre-request config guard), **improve-loop** (improvements-log FIFO cap), **content-page-detect** (URL/DOM page classification), **content-extract** (content-script constants, errors, log, extraction helpers), **content-messaging** (messaging plumbing: response resolution, retry, timeout wiring), **content-compare** (compare-page button injection, generate flow, log storage), **content-merge** (merge-dialog button injection and generate flows), **content-opened** (opened-PR scrape, generate wiring, review gate), **content-opened-buttons** (opened-PR split-button injection), and **build-secrets** (build-time secret-strip regression guard).
 
 The fetch-based suite (`bun run test:fetch`) chains the four suites that shell out to `gh` and require the `testPr` fixture: **coverage**, **extension**, **full** (commit coverage from description/prompt/both sides), and **pr-creation** (creation-page prompt assembly).
 
@@ -240,7 +241,7 @@ bun run test:fetch
 bun run test:all
 
 # Individually (offline):
-bun run test:logic         # prompt wording & drift guard
+bun run test:logic         # prompt wording & drift guard, prompt-budget cap
 bun run test:parse         # bot stripping / template fidelity
 bun run test:format        # render-quality rules
 bun run test:stream        # SSE chunk parsing
@@ -251,7 +252,7 @@ bun run test:config-save   # config write path (partial updates, NaN guard)
 bun run test:config-resolve # stored ↔ file config merge, NaN guard
 bun run test:pr-update     # GitHub title/body write path (mock fetch)
 bun run test:discovery     # repo-style cache & PR-template discovery
-bun run test:llm           # callAPI over mocked fetch (retries, JSON/SSE)
+bun run test:llm           # callAPI over mocked fetch (retries, JSON/SSE, stall & no-content timeouts)
 bun run test:sse           # incremental SSE parser
 bun run test:stream-render # streaming-render helpers in the content script
 bun run test:rubric        # acceptance-gate checks against generated output
@@ -260,6 +261,20 @@ bun run test:popup-text    # popup URL text helpers (trailing-slash stripping)
 bun run test:common        # repo-name / PR-number validation guards
 bun run test:diff-fetch    # PR diff retrieval over mocked fetch
 bun run test:pr-lists      # commit/file list pagination
+bun run test:handlers      # background handlers (generate/title/description/merge), mocked chrome+fetch
+bun run test:routing       # background message dispatch & keepalive answers
+bun run test:port-stream   # long-lived port streaming, content + background sides, disconnect abort
+bun run test:refinement-loop # refinement-loop clamping, regression-keep, abort
+bun run test:validate-config # pre-request config guard
+bun run test:improve-loop  # improve-loop improvements-map FIFO cap
+bun run test:content-page-detect # URL/DOM page classification
+bun run test:content-extract # content-script extraction + log helpers
+bun run test:content-messaging # messaging plumbing (retry, timeout wiring)
+bun run test:content-compare # compare-page buttons, generate flow, log storage
+bun run test:content-merge   # merge-dialog buttons + generate flows
+bun run test:content-opened  # opened-PR scrape, generate wiring, review gate
+bun run test:content-opened-buttons # opened-PR split-button injection
+bun run test:build-secrets   # build-time secret-strip regression guard
 
 # Individually (fetch-based, uses testPr):
 bun run test:coverage      # PR description covers commits
@@ -373,10 +388,15 @@ github-pr-generator/
 │   ├── improve-loop.ts            # automated description-improvement loop driver
 │   └── convert-icons.ts           # PNG icon generation from SVG (sharp)
 ├── tests/                         # bun-run TypeScript tests + live labs
-│   ├── (offline `bun run test`)   # prompt-logic, parse, prompt-format, stream-parse, repo-style,
-│   │                              #  refinement, diff-parse, config-save, config-resolve, pr-update,
-│   │                              #  discovery, llm, sse, stream-render, rubric, linkify, popup-text,
-│   │                              #  common, diff-fetch, pr-lists
+│   ├── (offline `bun run test`)   # prompt-logic, prompt-budget, parse, prompt-format, stream-parse,
+│   │                              #  repo-style, refinement, diff-parse, config-save, config-resolve,
+│   │                              #  pr-update, discovery, llm, llm-resilience, sse, stream-render,
+│   │                              #  rubric, linkify, popup-text, common, diff-fetch, pr-lists,
+│   │                              #  handlers, routing, port-stream, port-stream-background,
+│   │                              #  refinement-loop, validate-config, improve-loop,
+│   │                              #  content-page-detect, content-extract, content-messaging,
+│   │                              #  content-compare*, content-merge, content-opened,
+│   │                              #  content-opened-buttons, build-secrets
 │   ├── (fetch `bun run test:fetch`)  # commit-coverage, extension-coverage, full-coverage,
 │   │                                 #  pr-creation-prompt — need gh + testPr fixture
 │   ├── shared.ts / testkit.ts / prompt.ts / prompt-mirror.ts / fixtures.ts / expect-helpers.ts
