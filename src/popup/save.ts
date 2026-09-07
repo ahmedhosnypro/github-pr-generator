@@ -38,11 +38,18 @@ export function diffLimitOrDefault(key: DiffLimitKey, raw: string | number): num
   return coerceDiffLimit(key, raw) ?? DIFF_LIMITS[key].fallback;
 }
 
+/** Values a single-field autosave can carry (config fields plus coerced diff limits). */
+type FieldValue = string | boolean | number;
+
 /** One in-flight write per field; bursts (typing, or a checkbox's paired input+change) collapse to the latest value. */
-const persistTimers = new Map<keyof SaveConfigData, ReturnType<typeof setTimeout>>();
+interface PendingWrite {
+  timer: ReturnType<typeof setTimeout>;
+  value: FieldValue;
+}
+const pendingWrites = new Map<keyof SaveConfigData, PendingWrite>();
 const AUTOSAVE_DEBOUNCE_MS = 400;
 
-function writeField(key: keyof SaveConfigData, value: string | boolean | number): void {
+function writeField(key: keyof SaveConfigData, value: FieldValue): void {
   const partial = { [key]: value } as unknown as SaveConfigData;
   void sendToBackground<SaveConfigResponse>("saveConfig", partial).then((resp) => {
     // The service-worker write settles the save; direct storage is a fallback
@@ -54,12 +61,31 @@ function writeField(key: keyof SaveConfigData, value: string | boolean | number)
   });
 }
 
+// The popup page is destroyed when it closes — a debounce timer still inside
+// its window would be dropped and the final edits lost. Flush pending writes
+// on teardown (same pattern as content/log.ts's pagehide flush). Guarded so
+// Node-side unit tests can import the module without a DOM.
+function flushPendingWrites(): void {
+  for (const [key, pending] of pendingWrites) {
+    clearTimeout(pending.timer);
+    writeField(key, pending.value);
+  }
+  pendingWrites.clear();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushPendingWrites);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingWrites();
+  });
+}
+
 export function persistField(key: keyof SaveConfigData, value: string | boolean): void {
   if (!isLoaded()) return;
   // Latent-bug fix retained: strings get trimmed, booleans persist as-is.
   // Diff limits coerce to a clamped number on this single path, so storage
   // always holds the same type regardless of which input produced the value.
-  let normalized: string | boolean | number;
+  let normalized: FieldValue;
   if (isDiffLimitKey(key)) {
     const parsed = coerceDiffLimit(key, String(value));
     // Cleared/incomplete input must not persist NaN or "" as a number — skip it.
@@ -68,15 +94,15 @@ export function persistField(key: keyof SaveConfigData, value: string | boolean)
   } else {
     normalized = typeof value === "string" ? value.trim() : value;
   }
-  const pending = persistTimers.get(key);
-  if (pending !== undefined) clearTimeout(pending);
-  persistTimers.set(
-    key,
-    setTimeout(() => {
-      persistTimers.delete(key);
+  const pending = pendingWrites.get(key);
+  if (pending !== undefined) clearTimeout(pending.timer);
+  pendingWrites.set(key, {
+    value: normalized,
+    timer: setTimeout(() => {
+      pendingWrites.delete(key);
       writeField(key, normalized);
     }, AUTOSAVE_DEBOUNCE_MS),
-  );
+  });
 }
 
 export function saveSettings(): void {

@@ -1,13 +1,6 @@
 import type { GenerateMergeDescriptionResponse, GenerateMergeTitleResponse } from "../responses";
 import { BTN_MERGE_DESC_ID, BTN_MERGE_TITLE_ID } from "./constants";
-import {
-  clearButtonLoading,
-  createStreamingFill,
-  getButton,
-  type StreamingFieldFill,
-  setButtonLoading,
-  showToast,
-} from "./dom";
+import { clearButtonLoading, createStreamingFill, getButton, setButtonLoading, setReactValue, showToast } from "./dom";
 import { errorMessage, errorStack } from "./errors";
 import { extractBranchContext } from "./extract-context";
 import { log } from "./log";
@@ -24,6 +17,42 @@ import {
   extractOwnerRepoPRNumber,
 } from "./opened-scrape";
 import { streamFromBackground } from "./stream";
+
+// Tracks a streaming fill plus the field value captured before the stream
+// started, so an empty final parse or a mid-stream error can roll the field
+// back instead of leaving partial streamed text committed.
+interface StreamedField {
+  fill: ReturnType<typeof createStreamingFill> | null;
+  element: HTMLInputElement | HTMLTextAreaElement | null;
+  prior: string | null;
+}
+
+function newStreamedField(): StreamedField {
+  return { fill: null, element: null, prior: null };
+}
+
+function updateStreamedField(
+  field: StreamedField,
+  find: () => HTMLInputElement | HTMLTextAreaElement | null,
+  value: string,
+): void {
+  if (!field.fill) {
+    const el = find();
+    if (el) {
+      field.element = el;
+      field.prior = el.value || "";
+      field.fill = createStreamingFill(el);
+    }
+  }
+  field.fill?.update(value);
+}
+
+/** Restores the pre-stream value once a streamed fill committed partial text. */
+function rollbackStreamedField(field: StreamedField): boolean {
+  if (field.element === null || field.prior === null) return false;
+  setReactValue(field.element, field.prior);
+  return true;
+}
 
 export async function handleGenerateMergeTitle(): Promise<void> {
   const btn = getButton(BTN_MERGE_TITLE_ID);
@@ -58,34 +87,41 @@ async function generateMergeTitle(): Promise<void> {
   }
   log("info", "handleGenerateMergeTitle - " + JSON.stringify(ctx));
   let accumulated = "";
-  const streaming: { fill: StreamingFieldFill | null } = { fill: null };
-  const response = await streamFromBackground<GenerateMergeTitleResponse>(
-    {
-      type: "generateMergeTitle",
-      data: {
-        owner: ctx.owner,
-        repo: ctx.repo,
-        prNumber: ctx.prNumber,
-        existingTitle,
-        existingMergeTitle,
-        existingDescription,
-        branchContext,
+  const field = newStreamedField();
+  let response: GenerateMergeTitleResponse;
+  try {
+    response = await streamFromBackground<GenerateMergeTitleResponse>(
+      {
+        type: "generateMergeTitle",
+        data: {
+          owner: ctx.owner,
+          repo: ctx.repo,
+          prNumber: ctx.prNumber,
+          existingTitle,
+          existingMergeTitle,
+          existingDescription,
+          branchContext,
+        },
       },
-    },
-    (delta) => {
-      accumulated += delta;
-      if (!streaming.fill) {
-        const input = findMergeTitleInput();
-        if (input) streaming.fill = createStreamingFill(input);
-      }
-      streaming.fill?.update(accumulated);
-    },
-  );
-  streaming.fill?.finish();
-  fillMergeFields(response.title, "");
-  // Toast only what actually changed — fillMergeFields skips empty values.
+      (delta) => {
+        accumulated += delta;
+        updateStreamedField(field, findMergeTitleInput, accumulated);
+      },
+    );
+  } catch (err) {
+    if (rollbackStreamedField(field)) {
+      throw new Error(errorMessage(err) + " (the partial streamed text was rolled back)", { cause: err });
+    }
+    throw err;
+  }
+  field.fill?.finish();
   if (response.title.trim().length > 0) {
+    fillMergeFields(response.title, "");
     showToast("Merge commit title generated!");
+  } else if (rollbackStreamedField(field)) {
+    // The parse came back empty after partial text was already committed —
+    // restore the pre-stream value instead of leaving a truncated title.
+    showToast("Merge title was empty — restored the previous title.", true);
   } else {
     showToast("Merge title was empty — nothing applied.", true);
   }
@@ -125,34 +161,40 @@ async function generateMergeDescription(): Promise<void> {
   }
   log("info", "handleGenerateMergeDescription - " + JSON.stringify(ctx));
   let accumulated = "";
-  const streaming: { fill: StreamingFieldFill | null } = { fill: null };
-  const response = await streamFromBackground<GenerateMergeDescriptionResponse>(
-    {
-      type: "generateMergeDescription",
-      data: {
-        owner: ctx.owner,
-        repo: ctx.repo,
-        prNumber: ctx.prNumber,
-        existingTitle,
-        existingMergeTitle,
-        existingDescription,
-        existingMergeDescription: existingMergeDesc,
-        branchContext,
+  const field = newStreamedField();
+  let response: GenerateMergeDescriptionResponse;
+  try {
+    response = await streamFromBackground<GenerateMergeDescriptionResponse>(
+      {
+        type: "generateMergeDescription",
+        data: {
+          owner: ctx.owner,
+          repo: ctx.repo,
+          prNumber: ctx.prNumber,
+          existingTitle,
+          existingMergeTitle,
+          existingDescription,
+          existingMergeDescription: existingMergeDesc,
+          branchContext,
+        },
       },
-    },
-    (delta) => {
-      accumulated += delta;
-      if (!streaming.fill) {
-        const textarea = findMergeDescTextarea();
-        if (textarea) streaming.fill = createStreamingFill(textarea);
-      }
-      streaming.fill?.update(accumulated);
-    },
-  );
-  streaming.fill?.finish();
-  fillMergeFields("", response.description);
+      (delta) => {
+        accumulated += delta;
+        updateStreamedField(field, findMergeDescTextarea, accumulated);
+      },
+    );
+  } catch (err) {
+    if (rollbackStreamedField(field)) {
+      throw new Error(errorMessage(err) + " (the partial streamed text was rolled back)", { cause: err });
+    }
+    throw err;
+  }
+  field.fill?.finish();
   if (response.description.trim().length > 0) {
+    fillMergeFields("", response.description);
     showToast("Merge commit description generated!");
+  } else if (rollbackStreamedField(field)) {
+    showToast("Merge description was empty — restored the previous description.", true);
   } else {
     showToast("Merge description was empty — nothing applied.", true);
   }

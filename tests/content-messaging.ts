@@ -111,7 +111,8 @@ onSend = (_msg, cb) => {
   expectMatch("throw retry used two sends", attempts, 2);
 }
 
-// 6. Unrelated synchronous throw -> rejected immediately, no retry.
+// 6. Stale content script ("Extension context invalidated"): reject with an
+// actionable reload hint — retrying a dead context can never heal.
 {
   let attempts = 0;
   onSend = () => {
@@ -124,7 +125,42 @@ onSend = (_msg, cb) => {
   } catch (err) {
     caught = err instanceof Error ? err.message : String(err);
   }
-  expectMatch("unrelated throw rejects immediately", caught, "Extension context invalidated.");
+  expectIncludes("invalidated context rejects with reload hint", caught, "reload this page");
+  expectMatch("no retry for invalidated context", attempts, 1);
+}
+
+// 6b. Same failure arriving via lastError (async path) gets the same hint.
+{
+  let attempts = 0;
+  onSend = (_msg, cb) => {
+    attempts += 1;
+    setLastErrorBeforeCallback("Extension context invalidated.", cb, undefined);
+  };
+  let caught = "";
+  try {
+    await sendToBackground(CFG);
+  } catch (err) {
+    caught = err instanceof Error ? err.message : String(err);
+  }
+  expectIncludes("lastError invalidated context rejects with reload hint", caught, "reload this page");
+  expectMatch("no retry on lastError invalidation", attempts, 1);
+  lastError(undefined);
+}
+
+// 6c. Unrelated synchronous throw -> rejected immediately, no retry.
+{
+  let attempts = 0;
+  onSend = () => {
+    attempts += 1;
+    throw new Error("Some unexpected boom");
+  };
+  let caught = "";
+  try {
+    await sendToBackground(CFG);
+  } catch (err) {
+    caught = err instanceof Error ? err.message : String(err);
+  }
+  expectMatch("unrelated throw rejects immediately", caught, "Some unexpected boom");
   expectMatch("no retry for unrelated throw", attempts, 1);
 }
 

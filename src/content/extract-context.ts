@@ -47,14 +47,25 @@ function readBranchInputs(): [string, string] {
   return [baseSelect ? baseSelect.value || "" : "", headInput ? headInput.value || "" : ""];
 }
 
+// Branch refs in the compare URL are percent-encoded; the background's
+// diff.ts encodeURIComponent()s them again for the compare API, so they must
+// be decoded here first or non-ASCII branch names arrive double-encoded.
+function decodeRef(ref: string): string {
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return ref;
+  }
+}
+
 function applyCompareUrl(url: string, base: string, head: string): [string, string] {
   if (base && head) return [base, head];
   const match = /\/compare\/([^?#\s]+?)(?:[?#]|$|\s)/.exec(url);
   const spec = match?.[1];
   if (spec === undefined) return [base, head];
   const parts = spec.split("...");
-  const first = parts[0];
-  const second = parts[1];
+  const first = parts[0] === undefined ? undefined : decodeRef(parts[0]);
+  const second = parts[1] === undefined ? undefined : decodeRef(parts[1]);
   if (parts.length === 2) {
     if (!base && first !== undefined) base = first;
     if (!head && second !== undefined) head = second;
@@ -85,8 +96,9 @@ export function extractBranchContext(): BranchContext {
 
   let [baseBranch, headBranch] = readBranchInputs();
   [baseBranch, headBranch] = applyCompareUrl(url, baseBranch, headBranch);
-  [baseBranch, headBranch] = applyBranchTextNodes(".branch-name", baseBranch, headBranch);
-  [baseBranch, headBranch] = applyBranchTextNodes(".ref-name", baseBranch, headBranch);
+  // Modern GitHub renders branch refs as [data-component="BranchName"] nodes;
+  // the old .branch-name / .ref-name classes no longer exist on its pages.
+  [baseBranch, headBranch] = applyBranchTextNodes('[data-component="BranchName"]', baseBranch, headBranch);
   // Keep the "forkOwner:branch" namespace on head refs from fork PRs:
   // the compare API accepts it, and stripping it would compare against a
   // same-named branch (or nothing) in the base repo instead.

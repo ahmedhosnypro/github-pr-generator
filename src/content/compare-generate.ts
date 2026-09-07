@@ -16,26 +16,46 @@ import { log } from "./log";
 import { splitStreamedCombined, streamFromBackground } from "./stream";
 
 /** Per-token fill during streaming: batched via createStreamingFill so each chunk updates the value but events fire at most once per batch window. */
+interface StreamingFillState {
+  fill: StreamingFieldFill;
+  element: HTMLInputElement | HTMLTextAreaElement;
+  /** Field value captured before the stream started, for rollback. */
+  prior: string;
+}
+
 interface StreamingFills {
-  title: StreamingFieldFill | null;
-  desc: StreamingFieldFill | null;
+  title: StreamingFillState | null;
+  desc: StreamingFillState | null;
 }
 
 function fillPRFieldsStreaming(fills: StreamingFills, title: string, description: string): void {
   if (title) {
     if (!fills.title) {
       const el = document.querySelector<HTMLInputElement>('input[name="pull_request[title]"]');
-      if (el) fills.title = createStreamingFill(el);
+      if (el) fills.title = { fill: createStreamingFill(el), element: el, prior: el.value || "" };
     }
-    fills.title?.update(title);
+    fills.title?.fill.update(title);
   }
   if (description) {
     if (!fills.desc) {
       const el = document.querySelector<HTMLTextAreaElement>("textarea#pull_request_body");
-      if (el) fills.desc = createStreamingFill(el);
+      if (el) fills.desc = { fill: createStreamingFill(el), element: el, prior: el.value || "" };
     }
-    fills.desc?.update(description);
+    fills.desc?.fill.update(description);
   }
+}
+
+// An empty final parse or a mid-stream error must not leave partial streamed
+// text committed: restore what each streamed field held before generation.
+function rollbackStreamingFills(fills: StreamingFills): boolean {
+  let rolledBack = false;
+  for (const state of [fills.title, fills.desc]) {
+    if (state) {
+      setReactValue(state.element, state.prior);
+      rolledBack = true;
+    }
+  }
+  return rolledBack;
 }
 
 function extractExistingBody(): string {
@@ -122,32 +142,48 @@ async function runGenerate(): Promise<void> {
   log("info", "Streaming generate request over background port...");
   let accumulated = "";
   const fills: StreamingFills = { title: null, desc: null };
-  const result = await streamFromBackground<GenerateResponse>(
-    {
-      type: "generate",
-      data: {
-        commits: commits.map((c) => ({ message: c.message })),
-        fileChanges,
-        stats,
-        branchContext,
-        linkedIssues,
-        existingBody,
+  let result: GenerateResponse;
+  try {
+    result = await streamFromBackground<GenerateResponse>(
+      {
+        type: "generate",
+        data: {
+          commits: commits.map((c) => ({ message: c.message })),
+          fileChanges,
+          stats,
+          branchContext,
+          linkedIssues,
+          existingBody,
+        },
       },
-    },
-    (delta) => {
-      accumulated += delta;
-      const partial = splitStreamedCombined(accumulated);
-      fillPRFieldsStreaming(fills, partial.title, partial.description);
-    },
-  );
+      (delta) => {
+        accumulated += delta;
+        const partial = splitStreamedCombined(accumulated);
+        fillPRFieldsStreaming(fills, partial.title, partial.description);
+      },
+    );
+  } catch (err) {
+    if (rollbackStreamingFills(fills)) {
+      throw new Error(errorMessage(err) + " (the partial streamed text was rolled back)", { cause: err });
+    }
+    throw err;
+  }
   log("info", "Stream completed");
 
   // Commit the final batch of events before the authoritative fill below.
-  fills.title?.finish();
-  fills.desc?.finish();
+  fills.title?.fill.finish();
+  fills.desc?.fill.finish();
   fillPRFields(result.title, result.description);
-  log("info", "PR fields filled successfully - title: " + result.title);
-  showToast("PR title and description generated!");
+  if (result.title.trim().length > 0 || result.description.trim().length > 0) {
+    log("info", "PR fields filled successfully - title: " + result.title);
+    showToast("PR title and description generated!");
+  } else if (rollbackStreamingFills(fills)) {
+    // The final parse dropped everything the stream previewed — restore the
+    // pre-stream field values rather than leaving truncated partials behind.
+    showToast("The model returned an empty response — restored the previous text.", true);
+  } else {
+    showToast("The model returned an empty response — nothing was applied.", true);
+  }
 }
 
 export async function handleGenerate(): Promise<void> {

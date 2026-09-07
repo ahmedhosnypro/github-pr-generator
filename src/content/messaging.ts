@@ -101,9 +101,27 @@ function attemptSend<R>(call: PendingCall<R>, remaining: number): void {
   }
 }
 
+// A content script orphaned by an extension reload/update can never heal by
+// retrying: every send throws "Extension context invalidated" until the page
+// reloads. Detect it and reject with an actionable hint instead of the raw
+// Chrome string or a doomed retry.
+const CONTEXT_INVALIDATED = /extension context invalidated/i;
+const RELOAD_HINT = "The extension was reloaded or updated — reload this page to reconnect.";
+
+function contextInvalidatedError(): Error {
+  return new Error(RELOAD_HINT);
+}
+
 function handleSendError<R>(call: PendingCall<R>, remaining: number, err: unknown): void {
   if (call.done) return;
   const msgText = errorMessage(err);
+  if (CONTEXT_INVALIDATED.test(msgText)) {
+    clearTimers(call);
+    call.done = true;
+    log("warn", "sendToBackground on a stale context; page reload required");
+    call.reject(contextInvalidatedError());
+    return;
+  }
   if (/Receiving end does not exist|message channel closed/i.test(msgText) && remaining > 0) {
     log("warn", "sendToBackground threw (" + msgText + "); retrying once");
     // Keep the keepalive running across the retry — the retried call is the
@@ -130,6 +148,13 @@ function handleResponse<R>(call: PendingCall<R>, remaining: number, resp: unknow
     clearTimers(call);
     call.done = true;
     call.resolve(resp as R | MessageErrorResponse);
+    return;
+  }
+  if (CONTEXT_INVALIDATED.test(errMsg)) {
+    clearTimers(call);
+    call.done = true;
+    log("warn", "sendToBackground channel died on a stale context; page reload required");
+    call.reject(contextInvalidatedError());
     return;
   }
   if (channelClosed && remaining > 0) {

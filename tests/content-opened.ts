@@ -271,6 +271,65 @@ async function testGenerateDescriptionSuccess(): Promise<void> {
   expectMatch("review modal closes after apply", await waitUntil(() => !reviewModalOpen()), true);
 }
 
+async function testReviewModalReplacement(): Promise<void> {
+  console.log("--- opened-generate: replacing the review modal closes the old instance ---");
+  buildOpenedPrPage();
+  injectOpenedPRButtons();
+  bgMessages.length = 0;
+
+  // Spy on document-level listener wiring so the leaked-Escape-listener
+  // regression is observable in the stub DOM.
+  const docAny = document as unknown as {
+    addEventListener: (type: string, fn: unknown, capture?: boolean) => void;
+    removeEventListener?: (type: string, fn: unknown, capture?: boolean) => void;
+  };
+  const origAdd = docAny.addEventListener;
+  const keydownHandlers: unknown[] = [];
+  const removedHandlers = new Set<unknown>();
+  docAny.addEventListener = (type, fn, capture) => {
+    if (type === "keydown") keydownHandlers.push(fn);
+    origAdd(type, fn, capture);
+  };
+  docAny.removeEventListener = (type, fn) => {
+    if (type === "keydown") removedHandlers.add(fn);
+  };
+
+  setBgResponder((msg) => (msg.type === "generateTitle" ? { title: "feat: proposal A", updated: false } : {}));
+  handleGenerateOpenedTitle();
+  expectMatch("replacement test: first modal open", await waitUntil(reviewModalOpen), true);
+  expectMatch("first modal registered one keydown listener", keydownHandlers.length, 1);
+
+  // Second flow fires while the first modal is still open: the replacement
+  // must go through close() — detaching the old Escape listener — and must
+  // not fire the stale onCancel.
+  setBgResponder((msg) => (msg.type === "generateDescription" ? { body: "proposal B", updated: false } : {}));
+  handleGenerateOpenedDescription();
+  expectMatch(
+    "replacement keeps exactly one modal",
+    await waitUntil(() => reviewModalOpen() && document.querySelectorAll("#" + REVIEW_MODAL_ID).length === 1),
+    true,
+  );
+  expectMatch("old keydown listener detached on replace", removedHandlers.has(keydownHandlers[0]), true);
+  expectMatch("new modal registered its listener", keydownHandlers.length, 2);
+  expectMatch("replacement shows the new proposal", reviewField()?.value, "proposal B");
+  expectMatch("replacement field switched to textarea", reviewField()?.tagName, "TEXTAREA");
+  expectMatch("stale onCancel did not fire", toastState()?.text ?? "", "");
+  expectMatch(
+    "no apply message before user acts",
+    bgMessages.some((m) => (m.type ?? "").startsWith("apply")),
+    false,
+  );
+
+  clickReviewButton(REVIEW_CANCEL_SELECTOR);
+  expectMatch(
+    "cancel toast belongs to the live modal",
+    await waitUntil(() => toastState()?.text === "Update cancelled — the PR was not changed."),
+    true,
+  );
+  expectMatch("modal closed after cancel", reviewModalOpen(), false);
+  expectMatch("second keydown listener detached on cancel", removedHandlers.has(keydownHandlers[1]), true);
+}
+
 console.log("=== Content Script (opened PR scrape/generate) Tests ===\n");
 testUrlExtraction();
 testTitleExtraction();
@@ -278,6 +337,7 @@ testDescriptionExtraction();
 await testGenerateTitleSuccess();
 await testGenerateTitleFailurePaths();
 await testGenerateDescriptionSuccess();
+await testReviewModalReplacement();
 
 const failures = getFailures();
 if (failures > 0) {

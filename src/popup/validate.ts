@@ -110,7 +110,7 @@ export function showEndpointPermissionError(): void {
   showEndpointError("Permission needed", "Click Validate again and allow access to this host");
 }
 
-async function handleValidateError(err: unknown): Promise<void> {
+async function handleValidateError(err: unknown, seq: number): Promise<void> {
   if (isTimeoutError(err)) {
     showEndpointError("Timed out", "No response within " + String(VALIDATE_TIMEOUT_MS / 1000) + " seconds");
     return;
@@ -119,6 +119,9 @@ async function handleValidateError(err: unknown): Promise<void> {
   // non-declared origins (Chrome says "Failed to fetch", never "CORS"), so
   // probe the permission state instead of guessing from the message.
   const has = await hasEndpointPermission(endpointInput.value);
+  // The probe awaited — a newer validation may have superseded this one while
+  // it resolved; a stale response must not clobber the newer state.
+  if (seq !== validationSeq) return;
   if (!has) {
     showEndpointPermissionError();
     return;
@@ -171,6 +174,6 @@ async function runValidateAttempt(seq: number, url: string): Promise<void> {
     handleValidateResponse(response, isInsecureHttpEndpoint(url));
   } catch (err) {
     if (seq !== validationSeq) return;
-    await handleValidateError(err);
+    await handleValidateError(err, seq);
   }
 }

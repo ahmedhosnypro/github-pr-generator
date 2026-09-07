@@ -41,6 +41,9 @@ function handleAddedNode(node: Node): "stop" | "merge" | null {
   }
   if (nodeHasOpenedPRMarkers(node) && isPROpenedPage()) {
     injectOpenedPRButtons();
+    // The initial page check may have run before these markers mounted; make
+    // sure the merge-dialog poll is armed for the late-mounted page too.
+    startMergeCheckInterval();
   }
   return nodeHasMergeMarkers(node) ? "merge" : null;
 }
@@ -143,7 +146,15 @@ function init(): void {
     });
     log("info", "MutationObserver started");
   } else {
-    log("info", "Not a PR creation, opened PR, or merge page, skipping");
+    // No page type matched yet (e.g. a compare form mounting later than the
+    // script's initial check). Arm the observer anyway: the mutation handler
+    // injects buttons when PR/merge fields appear, and every injector is
+    // id-guarded so this is a no-op on pages that never match.
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+    log("info", "No PR page matched at init; observer armed as late-mount fallback");
   }
 }
 
