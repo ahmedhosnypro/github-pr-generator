@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { extractLinkedIssues as extractLinkedIssuesCanonical } from "../src/linked-issues";
 
 export interface TestPrRef {
   owner: string;
@@ -100,20 +101,9 @@ export function fetchPRFiles(testPr: TestPrRef): GhPrFile[] {
   return data.files;
 }
 
+// The canonical implementation lives in src/linked-issues.ts (consumed by the
+// content script and background handlers); the testkit takes raw message
+// strings instead of CommitInfo, so it adapts rather than duplicating.
 export function extractLinkedIssues(commits: string[]): string[] {
-  const issues: Record<string, true> = {};
-  const allMessages = commits.map((c) => c).join("\n");
-  const patterns = [
-    /(?:fixes|resolves|closes|fix|resolve|close|addresses|address|references|refs|see|related\s+to)\s+#(\d+)/gi,
-    /#([1-9]\d{2,})/g,
-  ];
-  for (const pattern of patterns) {
-    let match = pattern.exec(allMessages);
-    while (match !== null) {
-      const issueNumber = match[1];
-      if (issueNumber) issues[`#${issueNumber}`] = true;
-      match = pattern.exec(allMessages);
-    }
-  }
-  return Object.keys(issues);
+  return extractLinkedIssuesCanonical(commits.map((message) => ({ message })));
 }
