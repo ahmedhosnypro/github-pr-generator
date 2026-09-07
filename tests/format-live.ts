@@ -6,6 +6,7 @@ import { countDiffAnchors, parseCombinedResponse } from "../src/background/parse
 import { buildCombinedPrompt } from "../src/background/prompts/combined";
 import { buildChangesSummary } from "../src/background/summary";
 import type { ExtensionConfig } from "../src/types";
+import { renderedLineLength } from "../src/background/refinement-checks";
 import { expectMatch, getFailures } from "./expect-helpers";
 import { loadConfig } from "./shared";
 
@@ -75,7 +76,9 @@ async function callLocalModel(prompt: string): Promise<string> {
 }
 
 function longLineBreakerCount(text: string): number {
-  return text.split("\n").filter((line) => line.length > 400).length;
+  // Rendered length: raw markdown includes invisible link payloads (diffhunk
+  // anchors carry ~110 extra chars per anchor) that never render on GitHub.
+  return text.split("\n").filter((line) => renderedLineLength(line) > 400).length;
 }
 
 function longestBulletWords(text: string): number {
