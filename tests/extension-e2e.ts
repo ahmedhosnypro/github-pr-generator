@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     await popup.waitForSelector("#apiEndpoint", { timeout: 5000 });
     const hasSave = (await popup.locator("#saveBtn").count()) > 0;
     const hasTestApi = (await popup.locator("#testApiBtn").count()) > 0;
-    expectMatch("popup: endpoint field present", true, true);
+    expectMatch("popup: endpoint field editable", await popup.locator("#apiEndpoint").isEditable(), true);
     expectMatch("popup: save button present", hasSave, true);
     expectMatch("popup: test-api button present", hasTestApi, true);
     // Save a screenshot of the rendered popup for human review
