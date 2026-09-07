@@ -26,6 +26,8 @@ const BRANCH: BranchContext = {
 
 const SAMPLE_DIFF = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
 
+const notFound = () => new Response("Not Found", { status: 404 });
+
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
@@ -34,6 +36,22 @@ function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
   return fn().finally(() => {
     globalThis.fetch = original;
   });
+}
+
+// Captures console.log output (logMsg's sink) while fn runs; assertions must
+// happen after restore so expectMatch output is not swallowed.
+async function withCapturedLogs(fn: () => Promise<void>): Promise<string[]> {
+  const captured: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    captured.push(args.map(String).join(" "));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return captured;
 }
 
 function urlString(url: string | URL | Request): string {
@@ -197,6 +215,36 @@ async function testFetchTimeout(): Promise<void> {
   expectMatch("request carries an AbortSignal", sawSignal, true);
 }
 
+// (8) The 404 log hint is token-aware: with a token configured the message
+// does not blame auth (the 404 means the ref/repo is gone); without a token it
+// keeps the private-repo PAT hint.
+async function testNotFoundHintIsTokenAware(): Promise<void> {
+  const withTokenLogs = await withCapturedLogs(async () => {
+    await withFetch(
+      () => Promise.resolve(notFound()),
+      async () => {
+        await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      },
+    );
+  });
+  expectMatch("404 with a token does not suggest a PAT", withTokenLogs.join("\n").includes("PAT"), false);
+  expectMatch("404 with a token explains it is not auth", withTokenLogs.join("\n").includes("not an auth issue"), true);
+
+  const noTokenLogs = await withCapturedLogs(async () => {
+    await withFetch(
+      () => Promise.resolve(notFound()),
+      async () => {
+        await fetchGitHubDiff({ ...BASE_CONFIG, githubToken: "" }, BRANCH);
+      },
+    );
+  });
+  expectMatch(
+    "404 without a token keeps the PAT hint",
+    noTokenLogs.join("\n").includes("may need PAT for private repo"),
+    true,
+  );
+}
+
 async function main(): Promise<void> {
   console.log("=== Diff Fetch Tests ===\n");
   await testInvalidPrNumberTraversal();
@@ -206,6 +254,7 @@ async function main(): Promise<void> {
   await testRateLimited403();
   await testForbidden403();
   await testFetchTimeout();
+  await testNotFoundHintIsTokenAware();
 
   const failures = getFailures();
   if (failures > 0) {
