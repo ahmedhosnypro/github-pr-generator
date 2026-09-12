@@ -1,11 +1,7 @@
-import { buildHouseStyleNote, type RepoStyle } from "../repo-style";
+import type { RepoStyle } from "../repo-style";
 import {
   ANCHOR_RULE,
   BREAKING_CHANGES_RULE,
-  buildExistingContentSection,
-  buildScreenshotsHint,
-  buildSizeTierNote,
-  buildTemplateFillBlock,
   enforcePromptBudget,
   FORMATTING_RULES,
   INTENT_TITLES_RULE,
@@ -15,6 +11,7 @@ import {
   SECTIONS_PROMPT,
   TITLE_STYLE_GUIDANCE,
 } from "./common";
+import { buildDescriptionBodyBlocks } from "./description-blocks";
 
 // Re-exported so existing importers (e.g. prompt tests) keep their path.
 export { MAX_PROMPT_CHARS } from "./common";
@@ -25,19 +22,8 @@ function assemble(changesSummary: string, existingBody: string, style?: RepoStyl
   // buildChangesSummary — everything in it is third-party data, not commands.
   prompt += changesSummary + "\n";
 
-  const hasBody = existingBody.trim().length > 0;
-  if (hasBody) {
-    prompt += buildExistingContentSection(existingBody);
-  } else if (style?.template) {
-    prompt += buildTemplateFillBlock(style.template);
-  }
-
-  if (style) {
-    prompt += buildHouseStyleNote(style);
-  }
-
-  prompt += buildScreenshotsHint(changesSummary);
-  prompt += buildSizeTierNote(changesSummary);
+  const { blocks, hasExistingBody: hasBody } = buildDescriptionBodyBlocks(changesSummary, existingBody, style);
+  prompt += blocks;
 
   prompt += "OUTPUT FORMAT:\n";
   prompt += "1. First line: PR title only. " + TITLE_STYLE_GUIDANCE + ". Under 72 characters.\n";

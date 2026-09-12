@@ -9,18 +9,18 @@
 // hydrated with hydrateMissingDiffAnchors exactly as handleGenerateDescription
 // does before building the summary.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { hydrateMissingDiffAnchors } from "../src/background/anchor-hash";
 import { discoverRepoStyle } from "../src/background/github/discovery";
-import { buildStats, extractLinkedIssues, gatherPRData } from "../src/background/handlers/shared";
+import { extractLinkedIssues, gatherPRData } from "../src/background/handlers/shared";
 import { callAPI } from "../src/background/llm";
 import { countDiffAnchors, parseDescriptionOnlyResponse } from "../src/background/parse";
 import { buildDescriptionOnlyPrompt } from "../src/background/prompts/pr-prompts";
 import { refineDescription } from "../src/background/refinement";
 import type { RepoStyle } from "../src/background/repo-style";
-import { buildChangesSummary, countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
+import { countUsableAnchors, hasUsableAnchors } from "../src/background/summary";
 import type { ExtensionConfig, ThinkingEffort } from "../src/types";
 import { THINKING_EFFORTS } from "../src/types";
 import { scoreDescription } from "./pr-lab-rubric";
+import { hydrateAndBuildSummary } from "./pr-lab-shared";
 import { loadConfig } from "./shared";
 
 export interface LabRunResult {
@@ -162,24 +162,8 @@ async function generateAndRefine(
   ]);
   const commits = gathered.commits.map((c) => c.message);
 
-  // Hydrate missing anchors BEFORE building the summary so the prompt's
-  // anchors section and the refinement anchor check see the same set —
-  // mirrors handleGenerateDescription.
-  await hydrateMissingDiffAnchors(gathered.fileChanges);
+  const { stats, summary } = await hydrateAndBuildSummary(gathered, extractLinkedIssues(gathered.commits));
 
-  const stats = buildStats(gathered.prDetails, gathered.fileChanges);
-  const summary = buildChangesSummary(
-    {
-      commits: gathered.commits,
-      fileChanges: gathered.fileChanges,
-      stats,
-      branchContext: gathered.branchContext,
-      linkedIssues: extractLinkedIssues(gathered.commits),
-      existingBody: gathered.prDetails.body,
-    },
-    gathered.diffText,
-    gathered.hunkRanges,
-  );
   const prompt = buildDescriptionOnlyPrompt(summary, gathered.prDetails.title, gathered.prDetails.body, style);
   say(`generating (prompt ${String(prompt.length)} chars)`);
   const raw = await callAPI(config, prompt, 0.3, quiet ? undefined : () => process.stdout.write("."));

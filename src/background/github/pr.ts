@@ -12,17 +12,10 @@ import {
   GITHUB_JSON_ACCEPT,
   GITHUB_USER_AGENT,
   isRateLimited,
-  isValidPrNumber,
-  isValidRepoName,
   makeGitHubHeaders,
   rateLimitedResult,
-  rateLimitOrApiError,
-  rateLimitRemaining,
 } from "./common";
-
-function prUrl(owner: string, repo: string, prNumber: string): string {
-  return "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber;
-}
+import { fetchGitHubJson, logResponseStatus, prUrl, validatePrContext } from "./request";
 
 // head.label arrives as "owner:branch". The owner segment is the base repo's
 // owner for same-repo PRs, so fold the label back to the plain ref; a PR from
@@ -69,34 +62,15 @@ export async function fetchPRDetails(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRDetailsResult> {
-  if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
-    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
-
-  if (!isValidPrNumber(prNumber)) {
-    logMsg("Invalid PR number - prNumber: " + prNumber);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
+  const invalid = validatePrContext(owner, repo, prNumber, "Invalid PR number - prNumber: ");
+  if (invalid) return invalid;
 
   const url = prUrl(owner, repo, prNumber);
   logMsg("Fetching PR details from: " + url);
 
   try {
-    const response = await fetchWithTimeout(url, { method: "GET", headers: makeGitHubHeaders(config) });
-    logMsg(
-      "PR details response status: " +
-        String(response.status) +
-        ", rate limit remaining: " +
-        rateLimitRemaining(response),
-    );
-    if (!response.ok) {
-      const blocked = rateLimitOrApiError(response);
-      if (blocked) return blocked;
-      const errText = await response.text();
-      logMsg("GitHub API error fetching PR details: " + String(response.status) + " - " + errText.substring(0, 200));
-      return { error: "GITHUB_API_ERROR", status: response.status };
-    }
+    const response = await fetchGitHubJson("PR details", url, { method: "GET", headers: makeGitHubHeaders(config) });
+    if ("error" in response) return response;
     const prData = (await response.json()) as GitHubPRApiResponse;
     return mapPRDetails(prData, owner, repo);
   } catch (fetchErr) {
@@ -132,15 +106,8 @@ export async function updatePRField(
     return { error: "GITHUB_NO_TOKEN" };
   }
 
-  if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
-    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
-
-  if (!isValidPrNumber(prNumber)) {
-    logMsg("Invalid PR number - prNumber: " + prNumber);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
+  const invalid = validatePrContext(owner, repo, prNumber, "Invalid PR number - prNumber: ");
+  if (invalid) return invalid;
 
   const url = prUrl(owner, repo, prNumber);
   logMsg("Updating PR via PATCH: " + url + " fields: " + Object.keys(fields).join(", "));
@@ -154,12 +121,7 @@ export async function updatePRField(
 
   try {
     const response = await fetchWithTimeout(url, { method: "PATCH", headers, body: JSON.stringify(fields) });
-    logMsg(
-      "PR update response status: " +
-        String(response.status) +
-        ", rate limit remaining: " +
-        rateLimitRemaining(response),
-    );
+    logResponseStatus("PR update", response);
     if (!response.ok) return await updateFailure(response);
     const result = (await response.json()) as GitHubPRApiResponse;
     logMsg("PR updated successfully - title: " + String(result.title));

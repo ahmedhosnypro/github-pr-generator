@@ -3,19 +3,16 @@
 // a valid numeric PR number, and its diff text must come back through. Mocks
 // global fetch - no real network.
 import { fetchGitHubDiff } from "../src/background/github/diff";
-import type { BranchContext, ExtensionConfig } from "../src/types";
+import type { BranchContext } from "../src/types";
 import { expectMatch, getFailures } from "./expect-helpers";
-
-const BASE_CONFIG: ExtensionConfig = {
-  apiEndpoint: "https://probe.invalid/v1",
-  apiKey: "k",
-  model: "m",
-  githubToken: "gh-token",
-  diffEnabled: true,
-  diffMaxLines: 50,
-  diffMaxBytes: 4096,
-  thinkingEffort: "default",
-};
+import {
+  BASE_CONFIG,
+  countingFetchSpy,
+  expectTimeoutMapsToNetworkError,
+  urlString,
+  withCapturedLogs,
+  withFetch,
+} from "./fetch-mock";
 
 const BRANCH: BranchContext = {
   owner: "octocat",
@@ -24,60 +21,33 @@ const BRANCH: BranchContext = {
   headBranch: "feature",
 };
 
+// Diff tests exercise the diff fetch itself, so the shared config is enabled
+// with the larger diff budget.
+const DIFF_CONFIG = { ...BASE_CONFIG, diffEnabled: true, diffMaxLines: 50, diffMaxBytes: 4096 };
+
 const SAMPLE_DIFF = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
 
 const notFound = () => new Response("Not Found", { status: 404 });
 
-type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
-  const original = globalThis.fetch;
-  globalThis.fetch = impl as typeof fetch;
-  return fn().finally(() => {
-    globalThis.fetch = original;
-  });
-}
-
-// Captures console.log output (logMsg's sink) while fn runs; assertions must
-// happen after restore so expectMatch output is not swallowed.
-async function withCapturedLogs(fn: () => Promise<void>): Promise<string[]> {
-  const captured: string[] = [];
-  const original = console.log;
-  console.log = (...args: unknown[]) => {
-    captured.push(args.map(String).join(" "));
-  };
-  try {
-    await fn();
-  } finally {
-    console.log = original;
-  }
-  return captured;
-}
-
-function urlString(url: string | URL | Request): string {
-  if (typeof url === "string") return url;
-  return url instanceof URL ? url.href : url.url;
-}
-
 // (1) Compare 404 + invalid prNumber ".." → GITHUB_INVALID_CONTEXT, and the
 // fallback /pulls/ request never fires (fetch called exactly once).
 async function testInvalidPrNumberTraversal(): Promise<void> {
-  let calls = 0;
-  await withFetch(
-    () => {
-      calls++;
-      return Promise.resolve(new Response("Not Found", { status: 404 }));
-    },
-    async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH, "..");
-      expectMatch(
-        "traversal prNumber returns GITHUB_INVALID_CONTEXT",
-        out !== null && "error" in out && out.error,
-        "GITHUB_INVALID_CONTEXT",
-      );
-    },
+  await expectInvalidPrNumber(
+    "..",
+    "traversal prNumber returns GITHUB_INVALID_CONTEXT",
+    "traversal prNumber means fallback never fires",
   );
-  expectMatch("traversal prNumber means fallback never fires", calls, 1);
+}
+
+// Shared body of the invalid-prNumber cases: a 404-ing endpoint must be hit
+// exactly once (the compare URL), never the /pulls/ fallback.
+async function expectInvalidPrNumber(prNumber: string, errorLabel: string, callsLabel: string): Promise<void> {
+  const spy = countingFetchSpy(notFound);
+  await withFetch(spy.impl, async () => {
+    const out = await fetchGitHubDiff(DIFF_CONFIG, BRANCH, prNumber);
+    expectMatch(errorLabel, out !== null && "error" in out && out.error, "GITHUB_INVALID_CONTEXT");
+  });
+  expectMatch(callsLabel, spy.calls(), 1);
 }
 
 // (2) Compare 404 + valid prNumber "123" → fallback /pulls/123 fires and its
@@ -93,7 +63,7 @@ async function testValidPrNumberFallback(): Promise<void> {
       return Promise.resolve(new Response(SAMPLE_DIFF, { status: 200 }));
     },
     async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH, "123");
+      const out = await fetchGitHubDiff(DIFF_CONFIG, BRANCH, "123");
       expectMatch("fallback fires (compare + pulls)", urls.length, 2);
       expectMatch(
         "fallback hits /pulls/123",
@@ -107,22 +77,11 @@ async function testValidPrNumberFallback(): Promise<void> {
 
 // (3) Invalid prNumber "1?x=1" → GITHUB_INVALID_CONTEXT, single fetch call.
 async function testInvalidPrNumberQueryInjection(): Promise<void> {
-  let calls = 0;
-  await withFetch(
-    () => {
-      calls++;
-      return Promise.resolve(new Response("Not Found", { status: 404 }));
-    },
-    async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH, "1?x=1");
-      expectMatch(
-        "query-injected prNumber returns GITHUB_INVALID_CONTEXT",
-        out !== null && "error" in out && out.error,
-        "GITHUB_INVALID_CONTEXT",
-      );
-    },
+  await expectInvalidPrNumber(
+    "1?x=1",
+    "query-injected prNumber returns GITHUB_INVALID_CONTEXT",
+    "query-injected prNumber means fallback never fires",
   );
-  expectMatch("query-injected prNumber means fallback never fires", calls, 1);
 }
 
 // (4) 429 → GITHUB_RATE_LIMITED (primary signal: status 429).
@@ -130,7 +89,7 @@ async function testRateLimited429(): Promise<void> {
   await withFetch(
     () => Promise.resolve(new Response("rate limited", { status: 429, headers: { "X-RateLimit-Remaining": "40" } })),
     async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      const out = await fetchGitHubDiff(DIFF_CONFIG, BRANCH);
       expectMatch(
         "429 maps to GITHUB_RATE_LIMITED",
         out !== null && "error" in out && out.error,
@@ -145,7 +104,7 @@ async function testRateLimited403(): Promise<void> {
   await withFetch(
     () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "0" } })),
     async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      const out = await fetchGitHubDiff(DIFF_CONFIG, BRANCH);
       expectMatch(
         "403 with remaining 0 maps to GITHUB_RATE_LIMITED",
         out !== null && "error" in out && out.error,
@@ -162,7 +121,7 @@ async function testForbidden403(): Promise<void> {
   await withFetch(
     () => Promise.resolve(new Response("forbidden", { status: 403, headers: { "X-RateLimit-Remaining": "42" } })),
     async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      const out = await fetchGitHubDiff(DIFF_CONFIG, BRANCH);
       expectMatch(
         "403 with remaining 42 maps to GITHUB_API_ERROR",
         out !== null && "error" in out && out.error,
@@ -178,7 +137,7 @@ async function testForbidden403(): Promise<void> {
   await withFetch(
     () => Promise.resolve(new Response("forbidden", { status: 403 })),
     async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+      const out = await fetchGitHubDiff(DIFF_CONFIG, BRANCH);
       expectMatch(
         "403 without rate-limit header maps to GITHUB_API_ERROR",
         out !== null && "error" in out && out.error,
@@ -192,26 +151,7 @@ async function testForbidden403(): Promise<void> {
 // raise → GITHUB_NETWORK_ERROR with a timeout message (not a hang). Also
 // verifies the outgoing request carries an AbortSignal.
 async function testFetchTimeout(): Promise<void> {
-  let sawSignal = false;
-  await withFetch(
-    (_url, init) => {
-      sawSignal = init?.signal instanceof AbortSignal;
-      return Promise.reject(new DOMException("The operation timed out.", "TimeoutError"));
-    },
-    async () => {
-      const out = await fetchGitHubDiff(BASE_CONFIG, BRANCH);
-      expectMatch(
-        "timeout maps to GITHUB_NETWORK_ERROR",
-        out !== null && "error" in out && out.error,
-        "GITHUB_NETWORK_ERROR",
-      );
-      expectMatch(
-        "timeout message mentions it was a timeout",
-        out !== null && "error" in out && typeof out.message === "string" && out.message.includes("timed out"),
-        true,
-      );
-    },
-  );
+  const sawSignal = await expectTimeoutMapsToNetworkError(() => fetchGitHubDiff(DIFF_CONFIG, BRANCH));
   expectMatch("request carries an AbortSignal", sawSignal, true);
 }
 
@@ -223,7 +163,7 @@ async function testNotFoundHintIsTokenAware(): Promise<void> {
     await withFetch(
       () => Promise.resolve(notFound()),
       async () => {
-        await fetchGitHubDiff(BASE_CONFIG, BRANCH);
+        await fetchGitHubDiff(DIFF_CONFIG, BRANCH);
       },
     );
   });
@@ -234,7 +174,7 @@ async function testNotFoundHintIsTokenAware(): Promise<void> {
     await withFetch(
       () => Promise.resolve(notFound()),
       async () => {
-        await fetchGitHubDiff({ ...BASE_CONFIG, githubToken: "" }, BRANCH);
+        await fetchGitHubDiff({ ...DIFF_CONFIG, githubToken: "" }, BRANCH);
       },
     );
   });

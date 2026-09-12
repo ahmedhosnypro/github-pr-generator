@@ -24,6 +24,12 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const EMPTY_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const CACHE_PREFIX = "repoStyle:";
 
+// In-flight discovery per repo: two tabs generating for the same repo
+// concurrently both miss the cache and would duplicate the template +
+// merged-PR fetches. Later callers join the same promise; the entry is
+// removed on settle so a failure is retried on the next call.
+const inFlightDiscovery = new Map<string, Promise<RepoStyle>>();
+
 // Bot logins in the GitHub API always carry the "[bot]" suffix (e.g.
 // "dependabot[bot]"); a plain suffix match would also exclude humans like
 // "robot".
@@ -190,6 +196,24 @@ export async function discoverRepoStyle(config: ExtensionConfig, owner: string, 
     logMsg("Repo style cache hit for " + owner + "/" + repo);
     return cached;
   }
+  const existing = inFlightDiscovery.get(cacheKey);
+  if (existing) {
+    logMsg("Joining in-flight repo-style discovery for " + owner + "/" + repo);
+    return existing;
+  }
+  const discovery = runDiscovery(config, owner, repo, cacheKey).finally(() => {
+    inFlightDiscovery.delete(cacheKey);
+  });
+  inFlightDiscovery.set(cacheKey, discovery);
+  return discovery;
+}
+
+async function runDiscovery(
+  config: ExtensionConfig,
+  owner: string,
+  repo: string,
+  cacheKey: string,
+): Promise<RepoStyle> {
   try {
     const [template, samples] = await Promise.all([
       discoverPrTemplate(config, owner, repo),

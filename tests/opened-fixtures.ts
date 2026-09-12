@@ -1,10 +1,15 @@
 // Fixtures and test plumbing shared by the opened-PR content-script tests
 // (tests/content-opened.ts, tests/content-opened-buttons.ts): a GitHub
-// opened-PR page builder, toast inspection, a chrome.runtime.sendMessage
-// capture (dom-stub's chrome has no sendMessage — the opened-PR generate
-// flows use it, unlike the merge flow's stream port), and an async poll.
+// opened-PR page builder, a chrome.runtime.sendMessage capture (dom-stub's
+// chrome has no sendMessage — the opened-PR generate flows use it, unlike the
+// merge flow's stream port), and an async poll. Toast inspection lives in
+// content-compare-shared.ts and is re-exported here.
+
+import { toastState } from "./content-compare-shared";
 import type { StubElement } from "./dom-stub";
 import { h, resetPage, StubElement as StubElementClass, tick } from "./dom-stub";
+
+export { toastState };
 
 // The shared stub models appendChild/prepend but not multi-node append(),
 // which opened-buttons.ts uses when assembling the split title button.
@@ -16,7 +21,6 @@ import { h, resetPage, StubElement as StubElementClass, tick } from "./dom-stub"
 };
 
 export const OPENED_PR_URL = "https://github.com/octo/hello-world/pull/42";
-export const TOAST_ID = "ai-pr-generator-toast";
 export const OPENED_TITLE = "fix: repair the diff parser";
 export const OPENED_DESCRIPTION = "The original description body.";
 
@@ -44,13 +48,6 @@ export function buildOpenedPrPage(opts: { palette?: boolean } = {}): OpenedPrPag
   body.appendChild(titleArea);
   body.appendChild(group);
   return { body, titleArea, titleSpan, commentBody, actionsDiv };
-}
-
-export function toastState(): { text: string; isError: boolean } | null {
-  const toast = document.getElementById(TOAST_ID);
-  if (toast === null) return null;
-  const stub = toast as unknown as StubElement;
-  return { text: stub.textContent, isError: stub.classNameList.includes("ai-pr-generator-toast--error") };
 }
 
 // Poll a condition across macrotasks so click-dispatched `void handle*()`

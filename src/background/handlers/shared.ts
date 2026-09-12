@@ -6,6 +6,8 @@ import { fetchGitHubDiff } from "../github/diff";
 import { fetchPRCommits, fetchPRFiles } from "../github/list-pages";
 import { fetchPRDetails } from "../github/pr";
 import { logMsg } from "../log";
+import { parseDescriptionOnlyResponse } from "../parse";
+import { refineDescription } from "../refinement";
 
 export interface GatheredPRData {
   owner: string;
@@ -132,6 +134,55 @@ export async function prepareFieldApply(
     throw new Error(tokenRequiredMessage);
   }
   return { config, owner, repo, prNumber, text };
+}
+
+export interface RefinementOutcome {
+  description: string;
+  finalScore: number;
+}
+
+/**
+ * Shared tail of the description-generating handlers (opened-PR review flow and
+ * squash-merge flow): parse the description-only LLM answer, then run it
+ * through the quality feedback loop. `hasAnchors` and `anchorCount` differ per
+ * flow — merge passes false/null because its prompt forbids diff hunk refs and
+ * the flow never resolves them.
+ */
+export async function parseAndRefineDescription(
+  label: string,
+  args: {
+    config: ExtensionConfig;
+    styleAiDisclosure: boolean;
+    llmResult: string;
+    title: string;
+    commitMessages: string[];
+    hasAnchors: boolean;
+    anchorCount: number | null;
+    stats: PRStats | null;
+    preserveAuthored: boolean;
+    signal?: AbortSignal;
+  },
+): Promise<RefinementOutcome> {
+  const newDescription = parseDescriptionOnlyResponse(args.llmResult, {
+    preserveAiDisclosure: args.styleAiDisclosure,
+  });
+  logMsg(label + " - parsed description length: " + String(newDescription.length));
+
+  const { description: refinedDescription, finalScore } = await refineDescription(
+    args.config,
+    args.title,
+    newDescription,
+    args.commitMessages,
+    args.hasAnchors,
+    3, // max iterations
+    10, // target score
+    args.stats,
+    undefined,
+    args.preserveAuthored,
+    args.signal,
+    args.anchorCount,
+  );
+  return { description: refinedDescription, finalScore };
 }
 
 // Shared prologue of the title/description update handlers: log the request,

@@ -90,21 +90,25 @@ export function pruneImprovements(improvements: Record<string, string>, max = MA
   }
 }
 
-async function measureGitHub(token: string | undefined): Promise<EndpointResult> {
-  const url = "https://api.github.com/rate_limit";
-  const name = "GitHub API";
+async function measureEndpoint(name: string, url: string, request: () => Promise<Response>): Promise<EndpointResult> {
   const start = performance.now();
   try {
-    const headers: Record<string, string> = {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "github-pr-generator-improve-loop",
-    };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
+    const response = await request();
     return { name, url, latencyMs: response.ok ? Math.round(performance.now() - start) : -1 };
   } catch {
     return { name, url, latencyMs: -1 };
   }
+}
+
+async function measureGitHub(token: string | undefined): Promise<EndpointResult> {
+  const url = "https://api.github.com/rate_limit";
+  const name = "GitHub API";
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "github-pr-generator-improve-loop",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return measureEndpoint(name, url, () => fetch(url, { headers, signal: AbortSignal.timeout(10_000) }));
 }
 
 async function measureLlm(config: LocalConfig): Promise<EndpointResult> {
@@ -113,9 +117,8 @@ async function measureLlm(config: LocalConfig): Promise<EndpointResult> {
     return { name, url: config.apiEndpoint || "(not configured)", latencyMs: -1 };
   }
   const url = `${config.apiEndpoint.replace(/\/+$/, "")}/chat/completions`;
-  const start = performance.now();
-  try {
-    const response = await fetch(url, {
+  return measureEndpoint(name, url, () =>
+    fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -128,11 +131,8 @@ async function measureLlm(config: LocalConfig): Promise<EndpointResult> {
         stream: false,
       }),
       signal: AbortSignal.timeout(60_000),
-    });
-    return { name, url, latencyMs: response.ok ? Math.round(performance.now() - start) : -1 };
-  } catch {
-    return { name, url, latencyMs: -1 };
-  }
+    }),
+  );
 }
 
 async function runCycle(): Promise<EndpointResult[]> {

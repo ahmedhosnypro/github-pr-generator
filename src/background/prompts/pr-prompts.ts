@@ -2,10 +2,6 @@ import { buildHouseStyleNote, type RepoStyle } from "../repo-style";
 import {
   ANCHOR_RULE,
   BREAKING_CHANGES_RULE,
-  buildExistingContentSection,
-  buildScreenshotsHint,
-  buildSizeTierNote,
-  buildTemplateFillBlock,
   enforcePromptBudget,
   FORMATTING_RULES,
   INTENT_TITLES_RULE,
@@ -17,6 +13,7 @@ import {
   TITLE_STYLE_GUIDANCE,
   wrapUntrustedData,
 } from "./common";
+import { buildDescriptionBodyBlocks } from "./description-blocks";
 
 export function buildTitleOnlyPrompt(
   changesSummary: string,
@@ -101,19 +98,12 @@ function assembleDescriptionOnlyPrompt(
       "\n";
   }
 
-  const hasDescription = existingDescription.trim().length > 0;
-  if (hasDescription) {
-    prompt += buildExistingContentSection(existingDescription);
-  } else if (style?.template) {
-    prompt += buildTemplateFillBlock(style.template);
-  }
-
-  if (style) {
-    prompt += buildHouseStyleNote(style);
-  }
-
-  prompt += buildScreenshotsHint(changesSummary);
-  prompt += buildSizeTierNote(changesSummary);
+  const { blocks, hasExistingBody: hasDescription } = buildDescriptionBodyBlocks(
+    changesSummary,
+    existingDescription,
+    style,
+  );
+  prompt += blocks;
 
   prompt += "OUTPUT FORMAT:\n";
   prompt += "Output ONLY the PR description body as structured markdown. Do NOT include a title line.\n\n";

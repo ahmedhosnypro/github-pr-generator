@@ -11,19 +11,9 @@
 import { ensureArtifactEnding } from "../src/background/description-normalize";
 import { refineDescription } from "../src/background/refinement";
 import { scoreDescription } from "../src/background/refinement-checks";
-import type { ExtensionConfig } from "../src/types";
 import { expectMatch, getFailures } from "./expect-helpers";
-
-const BASE_CONFIG: ExtensionConfig = {
-  apiEndpoint: "https://probe.invalid/v1",
-  apiKey: "k",
-  model: "m",
-  githubToken: "gh-t",
-  diffEnabled: false,
-  diffMaxLines: 10,
-  diffMaxBytes: 100,
-  thinkingEffort: "default",
-};
+import { BASE_CONFIG, type FetchImpl } from "./llm-shared";
+import { FULL_DESCRIPTION } from "./refinement-shared";
 
 const STATS = { files: 3, additions: 10, deletions: 2 };
 
@@ -33,30 +23,9 @@ const UNCOVERED_COMMITS = ["chore: frabjous gizmo"];
 
 // Full-marks draft with anchors + stats present: passes every applicable check
 // when the commit list is empty (or covered) and the ending stays an artifact.
-const PERFECT = [
-  "## Summary",
-  "Fixed the token expiry race by refreshing before each request.",
-  "",
-  "## Changes",
-  "- **Auth** — refresh token early [[1]](diffhunk://#diff-aaaa_L1-R2)",
-  "- **Client** — retries once [[2]](diffhunk://#diff-bbbb_L3-R4)",
-  "- **Tests** — covers the race [[3]](diffhunk://#diff-cccc_L5-R6)",
-  "",
-  "## Testing",
-  "1. Run the suite",
-  "```bash",
-  "bun run test",
-  "```",
-  "Expected: all green",
-  "",
-  "2. Retry with an expired token",
-  "```bash",
-  "bun run dev",
-  "```",
-  "Expected: request succeeds after refresh",
-  "",
-  "Scope: 3 files, +10/-2",
-].join("\n");
+// Same fixture as refinement-shared's FULL_DESCRIPTION (scoring-suite draft);
+// imported here so the loop tests and scoring tests share one definition.
+const PERFECT = FULL_DESCRIPTION;
 
 // Full score WITH commits: same body plus a bullet naming the commit words.
 const COVERED = PERFECT.replace(
@@ -86,8 +55,6 @@ const WORSE =
 // to these, so the tests survive rubric check-list changes as long as the
 // fixture relations (pinned in fixtureSanity) keep holding.
 const SCORE = { broken: 0, worse: 0, perfectUncovered: 0, max: 0 };
-
-type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 function contentResponse(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {

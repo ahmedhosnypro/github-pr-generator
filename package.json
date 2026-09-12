@@ -43,7 +43,7 @@
     "test:config-resolve": "bun run tests/config-resolve.ts",
     "test:pr-update": "bun run tests/pr-update.ts",
     "test:discovery": "bun run tests/discovery.ts",
-    "test:llm": "bun run tests/llm.ts && bun run tests/llm-resilience.ts",
+    "test:llm": "bun run tests/llm.ts && bun run tests/llm-resilience.ts && bun run tests/llm-parallel.ts",
     "test:sse": "bun run tests/sse.ts",
     "test:stream-render": "bun run tests/stream-render.ts",
     "test:rubric": "bun run tests/rubric.ts",

@@ -10,6 +10,7 @@ import {
   sseContentDripResponse,
   sseEmptyResponse,
   sseKeepaliveDripResponse,
+  sseReasoningDripResponse,
   sseSnapshotDripResponse,
   sseStallResponse,
   stallingErrorBodyResponse,
@@ -152,19 +153,36 @@ async function testSlowContentStreamSurvives(): Promise<void> {
  * every frame) is real content progress: it must re-arm the no-content budget
  * and run past the shrunk floor budget (~60ms) to completion.
  */
-async function testGrowingSnapshotStreamSurvives(): Promise<void> {
+/** Shared body of the drip-survival tests: a stream whose frames keep making real progress must run past the shrunk floor budget (~60ms) to completion, delivering its frames through the chunk callback. */
+async function expectDripSurvives(
+  label: string,
+  makeResponse: (init?: RequestInit) => Response,
+  expected: string,
+  finalChunkCheck: (chunks: string[]) => void,
+): Promise<void> {
   await withFastTimers(() =>
     withFetch(
-      (_url, init) => Promise.resolve(sseSnapshotDripResponse(init, 100, 1)),
+      (_url, init) => Promise.resolve(makeResponse(init)),
       async () => {
         const started = Date.now();
         const chunks: string[] = [];
         const out = await callAPI(BASE_CONFIG, "prompt", 0.3, (delta) => chunks.push(delta));
-        expectMatch("growing snapshot stream completed in full", out, "x".repeat(100));
-        expectMatch("final snapshot delivered as one chunk", chunks.join(""), "x".repeat(100));
-        expectMatch("snapshot stream survived past the floor budget", Date.now() - started >= 85, true);
+        expectMatch(label + " stream completed in full", out, expected);
+        finalChunkCheck(chunks);
+        expectMatch(label + " stream survived past the floor budget", Date.now() - started >= 85, true);
       },
     ),
+  );
+}
+
+async function testGrowingSnapshotStreamSurvives(): Promise<void> {
+  await expectDripSurvives(
+    "growing snapshot",
+    (init) => sseSnapshotDripResponse(init, 100, 1),
+    "x".repeat(100),
+    (chunks) => {
+      expectMatch("final snapshot delivered as one chunk", chunks.join(""), "x".repeat(100));
+    },
   );
 }
 
@@ -186,6 +204,23 @@ async function testStagnantSnapshotDripRejected(): Promise<void> {
         );
       },
     ),
+  );
+}
+
+/**
+ * A thinking model can stream minutes of reasoning_content before its first
+ * answer token. Reasoning growth is real model progress, so it keeps the
+ * no-content budget re-armed: this drip must survive past the shrunk floor
+ * budget (~60ms) and then deliver its answer.
+ */
+async function testReasoningDripSurvives(): Promise<void> {
+  await expectDripSurvives(
+    "long reasoning",
+    (init) => sseReasoningDripResponse(init, 100, 1),
+    "answer",
+    (chunks) => {
+      expectMatch("reasoning never reaches the chunk callback", chunks.join(""), "answer");
+    },
   );
 }
 
@@ -212,6 +247,7 @@ async function main(): Promise<void> {
   await testSlowContentStreamSurvives();
   await testGrowingSnapshotStreamSurvives();
   await testStagnantSnapshotDripRejected();
+  await testReasoningDripSurvives();
 
   // Retry back-sleeps must honor caller abort.
   await expectSleepAborts("transient backoff sleep", () => new Response('{"error":"boom"}', { status: 503 }), 1500);

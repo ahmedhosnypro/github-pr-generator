@@ -95,6 +95,36 @@ console.log("=== SSE Parser Tests ===\n");
   expectMatch("string snapshot still captured", p.getSnapshot(), "string snapshot");
 }
 
+// Reasoning (thinking-model) streams: reasoning_content is captured separately
+// and must never leak into the answer deltas.
+{
+  const p = createSSEParser();
+  const reasoningDelta = JSON.stringify({ choices: [{ delta: { reasoning_content: "let me think" } }] });
+  const out = p.push(`data: ${reasoningDelta}\n\ndata: ${deltaJson("answer")}\n\n`);
+  expectMatch("reasoning deltas stay out of the answer stream", out.join("|"), "answer");
+  expectMatch("reasoning captured separately", p.getReasoning(), "let me think");
+}
+
+// A chunk can carry both reasoning_content and content (omniroute/Gemini 3
+// emits the first answer token in the same frame as the tail of the thinking).
+{
+  const p = createSSEParser();
+  const both = JSON.stringify({ choices: [{ delta: { content: "answer", reasoning_content: "tail of thought" } }] });
+  const out = p.push(`data: ${both}\n\n`);
+  expectMatch("mixed frame still delivers content", out.join("|"), "answer");
+  expectMatch("mixed frame still captures reasoning", p.getReasoning(), "tail of thought");
+}
+
+// Message-level reasoning snapshots (non-delta servers) are tracked too, and
+// non-string reasoning payloads are dropped like non-string content.
+{
+  const p = createSSEParser();
+  const arrReasoning = JSON.stringify({ choices: [{ delta: { reasoning_content: ["not", "a", "string"] } }] });
+  const msgReasoning = JSON.stringify({ choices: [{ message: { reasoning_content: "whole thought" } }] });
+  p.push(`data: ${arrReasoning}\n\ndata: ${msgReasoning}\n\n`);
+  expectMatch("non-string reasoning dropped, message reasoning kept", p.getReasoning(), "whole thought");
+}
+
 const failures = getFailures();
 if (failures > 0) {
   console.log(`\n❌ ${String(failures)} check(s) FAILED`);

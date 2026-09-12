@@ -1,3 +1,4 @@
+import { isLoopbackHostname } from "../loopback";
 import {
   apiEndpointError,
   connectionStatus,
@@ -21,16 +22,6 @@ insecureEndpointWarning.setAttribute("aria-live", "polite");
 
 const INSECURE_WARNING_TEXT =
   "Warning: this endpoint uses plain HTTP. Your API key will be sent in cleartext over an unencrypted connection.";
-
-function isLoopbackHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // The URL parser normalizes IPv4 (octal/hex/decimal literals included), so a
-  // "127." prefix check covers the whole 127.0.0.0/8 loopback block.
-  if (host.startsWith("127.")) return true;
-  // Hostname for IPv6 includes brackets under the WHATWG URL spec.
-  return host === "[::1]";
-}
 
 /** True when the endpoint would carry the Bearer token over cleartext HTTP to a non-loopback host. */
 function isInsecureHttpEndpoint(value: string): boolean {

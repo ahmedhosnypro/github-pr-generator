@@ -4,21 +4,8 @@
 // chrome.storage.session — no real network, no real extension APIs.
 import { discoverRepoStyle } from "../src/background/github/discovery";
 import { EMPTY_REPO_STYLE, type RepoStyle } from "../src/background/repo-style";
-import type { ExtensionConfig } from "../src/types";
 import { expectMatch, getFailures } from "./expect-helpers";
-
-const BASE_CONFIG: ExtensionConfig = {
-  apiEndpoint: "https://probe.invalid/v1",
-  apiKey: "k",
-  model: "m",
-  githubToken: "gh-t",
-  diffEnabled: false,
-  diffMaxLines: 10,
-  diffMaxBytes: 100,
-  thinkingEffort: "default",
-};
-
-type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
+import { BASE_CONFIG, type FetchImpl, withFetch } from "./llm-shared";
 
 interface FetchSpy {
   urls: string[];
@@ -65,15 +52,7 @@ function urlFetch(routes: Record<string, () => Response>, spy: FetchSpy): FetchI
   };
 }
 
-const originalFetch = globalThis.fetch;
 const originalChrome = (globalThis as Record<string, unknown>).chrome;
-
-function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
-  globalThis.fetch = impl as typeof fetch;
-  return fn().finally(() => {
-    globalThis.fetch = originalFetch;
-  });
-}
 
 // Background logMsg writes straight to console.log; capture those lines so a
 // test can assert on what was logged during one discovery run.

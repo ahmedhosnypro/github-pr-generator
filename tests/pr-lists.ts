@@ -4,18 +4,20 @@
 // tests/pr-lists-partial.ts. Mocks global fetch — no real network.
 import { fetchPRCommits, fetchPRFiles } from "../src/background/github/list-pages";
 import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
+import { countingFetchSpy, expectTimeoutMapsToNetworkError } from "./fetch-mock";
 import type { FetchImpl } from "./pr-lists-helpers";
 import { BASE_CONFIG, fullCommitPage, jsonResponse, urlString, withCapturedLogs, withFetch } from "./pr-lists-helpers";
 import { runPartialPaginationTests } from "./pr-lists-partial";
 
+/** A spy fetch stub that counts calls and answers with an empty JSON list — for guard tests that must observe "fetch never called". */
+function emptyListSpy(): { impl: FetchImpl; calls: () => number } {
+  return countingFetchSpy(() => jsonResponse([]));
+}
+
 // (1) fetchPRCommits with invalid prNumber → GITHUB_INVALID_CONTEXT, fetch never called.
 async function testCommitsInvalidPrNumber(): Promise<void> {
-  let calls = 0;
-  const spy: FetchImpl = () => {
-    calls++;
-    return Promise.resolve(jsonResponse([]));
-  };
-  await withFetch(spy, async () => {
+  const spy = emptyListSpy();
+  await withFetch(spy.impl, async () => {
     const traversal = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "..");
     expectMatch(
       'prNumber ".." returns GITHUB_INVALID_CONTEXT',
@@ -23,7 +25,7 @@ async function testCommitsInvalidPrNumber(): Promise<void> {
       "GITHUB_INVALID_CONTEXT",
     );
   });
-  await withFetch(spy, async () => {
+  await withFetch(spy.impl, async () => {
     const alpha = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "abc");
     expectMatch(
       'prNumber "abc" returns GITHUB_INVALID_CONTEXT',
@@ -31,7 +33,7 @@ async function testCommitsInvalidPrNumber(): Promise<void> {
       "GITHUB_INVALID_CONTEXT",
     );
   });
-  expectMatch("invalid prNumber means fetch never called", calls, 0);
+  expectMatch("invalid prNumber means fetch never called", spy.calls(), 0);
 }
 
 // (2) fetchPRFiles with empty prNumber → GITHUB_INVALID_CONTEXT, fetch never called.
@@ -134,12 +136,8 @@ async function testFiles403Disambiguation(): Promise<void> {
 
 // (6b) Invalid owner/repo guards on fetchPRCommits and fetchPRFiles.
 async function testInvalidOwnerRepo(): Promise<void> {
-  let calls = 0;
-  const spy: FetchImpl = () => {
-    calls++;
-    return Promise.resolve(jsonResponse([]));
-  };
-  await withFetch(spy, async () => {
+  const spy = emptyListSpy();
+  await withFetch(spy.impl, async () => {
     const badOwner = await fetchPRCommits(BASE_CONFIG, "bad/owner", "hello-world", "42");
     expectMatch(
       "commits: invalid owner returns GITHUB_INVALID_CONTEXT",
@@ -147,7 +145,7 @@ async function testInvalidOwnerRepo(): Promise<void> {
       "GITHUB_INVALID_CONTEXT",
     );
   });
-  await withFetch(spy, async () => {
+  await withFetch(spy.impl, async () => {
     const badRepo = await fetchPRFiles(BASE_CONFIG, "octocat", "..", "42");
     expectMatch(
       "files: invalid repo returns GITHUB_INVALID_CONTEXT",
@@ -155,7 +153,7 @@ async function testInvalidOwnerRepo(): Promise<void> {
       "GITHUB_INVALID_CONTEXT",
     );
   });
-  expectMatch("invalid owner/repo means fetch never called", calls, 0);
+  expectMatch("invalid owner/repo means fetch never called", spy.calls(), 0);
 }
 
 // (6c) Pagination is bounded: a server that always returns full pages stops
@@ -188,23 +186,7 @@ async function testPaginationBounded(): Promise<void> {
 // (7) Timeout: fetch rejects with the DOMException AbortSignal.timeout would
 // raise → GITHUB_NETWORK_ERROR with a timeout message (not a hang).
 async function testCommitsFetchTimeout(): Promise<void> {
-  let sawSignal = false;
-  await withFetch(
-    (_url, init) => {
-      sawSignal = init?.signal instanceof AbortSignal;
-      return Promise.reject(new DOMException("The operation timed out.", "TimeoutError"));
-    },
-    async () => {
-      const out = await fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42");
-      expectMatch("timeout maps to GITHUB_NETWORK_ERROR", "error" in out && out.error, "GITHUB_NETWORK_ERROR");
-      expectMatch(
-        "timeout message mentions it was a timeout",
-        "error" in out && typeof out.message === "string" && out.message.includes("timed out"),
-        true,
-      );
-    },
-  );
-  expectMatch("request carries an AbortSignal", sawSignal, true);
+  await expectTimeoutMapsToNetworkError(() => fetchPRCommits(BASE_CONFIG, "octocat", "hello-world", "42"));
 }
 
 async function main(): Promise<void> {

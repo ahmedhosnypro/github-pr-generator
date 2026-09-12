@@ -10,12 +10,10 @@ import { updatePRField } from "../github/pr";
 import { resolveDiffLinks } from "../linkify";
 import { callAPI } from "../llm";
 import { logMsg } from "../log";
-import { parseDescriptionOnlyResponse } from "../parse";
 import { isLikelyTemplate } from "../prompts/common";
 import { buildDescriptionOnlyPrompt } from "../prompts/pr-prompts";
-import { refineDescription } from "../refinement";
 import { buildChangesSummary, countUsableAnchors, hasUsableAnchors } from "../summary";
-import { gatherForFieldUpdate, prepareFieldApply } from "./shared";
+import { gatherForFieldUpdate, parseAndRefineDescription, prepareFieldApply } from "./shared";
 
 const TOKEN_REQUIRED_MESSAGE =
   "GitHub Personal Access Token is required to update PR description. Set it in the extension popup (needs 'repo' scope).";
@@ -60,24 +58,17 @@ export async function handleGenerateDescription(data: OpenedPRData): Promise<Gen
   logMsg("handleGenerateDescription - built descPrompt, length: " + String(descPrompt.length));
 
   const llmResult = await callAPI(config, descPrompt);
-  const newDescription = parseDescriptionOnlyResponse(llmResult, { preserveAiDisclosure: style.aiDisclosure });
-  logMsg("handleGenerateDescription - parsed description length: " + String(newDescription.length));
-
-  // Refine the generated description through quality feedback loop
-  const { description: refinedDescription, finalScore } = await refineDescription(
+  const { description: refinedDescription, finalScore } = await parseAndRefineDescription("handleGenerateDescription", {
     config,
-    gathered.prDetails.title || data.existingTitle || "",
-    newDescription,
-    gathered.commits.map((c) => c.message),
-    gathered.fileChanges.length > 0 && hasUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
-    3, // max iterations
-    10, // target score
+    styleAiDisclosure: style.aiDisclosure,
+    llmResult,
+    title: gathered.prDetails.title || data.existingTitle || "",
+    commitMessages: gathered.commits.map((c) => c.message),
+    hasAnchors: gathered.fileChanges.length > 0 && hasUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
+    anchorCount: countUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
     stats,
-    undefined,
     preserveAuthored,
-    undefined,
-    countUsableAnchors(gathered.fileChanges, gathered.hunkRanges),
-  );
+  });
   logMsg("Refinement complete: score " + String(finalScore));
 
   const finalDescription = resolveDiffLinks(refinedDescription, {

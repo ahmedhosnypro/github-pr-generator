@@ -5,6 +5,7 @@
 // installed the document/window/chrome globals, so they are imported
 // dynamically (biome's import organizer would hoist static src imports).
 
+import { toastState } from "./content-compare-shared";
 import type { StubElement } from "./dom-stub";
 import { h, resetPage, setLocation, setStreamHandler, streamRequests, tick } from "./dom-stub";
 import { expectMatch, getFailures } from "./expect-helpers";
@@ -16,7 +17,6 @@ const { findMergeDescTextarea, probeMergeDialogFields } = await import("../src/c
 const { handleGenerateMergeDescription, handleGenerateMergeTitle } = await import("../src/content/merge-generate");
 
 const PR_URL = "https://github.com/o/r/pull/42";
-const TOAST_ID = "ai-pr-generator-toast";
 
 interface MergePage {
   body: StubElement;
@@ -41,13 +41,6 @@ function buildMergeDialogPage(): MergePage {
   const confirm = h("div", { class: "ConfirmMergeBox ConfirmMerge" });
   body.appendChild(h("div", {}, confirm, titleWrapper, descWrapper));
   return { body, titleInput, titleWrapper, descTextarea, descWrapper };
-}
-
-function toastState(): { text: string; isError: boolean } | null {
-  const toast = document.getElementById(TOAST_ID);
-  if (toast === null) return null;
-  const stub = toast as unknown as StubElement;
-  return { text: stub.textContent, isError: stub.classNameList.includes("ai-pr-generator-toast--error") };
 }
 
 interface CapturedMergeRequest {

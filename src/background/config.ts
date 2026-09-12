@@ -1,4 +1,5 @@
 import { resolveConfig } from "../config-resolve";
+import { isLoopbackHostname } from "../loopback";
 import type { ExtensionConfig, FileConfig, StoredConfig } from "../types";
 import { clampDiffLimit } from "./config-save";
 import { errorMessage, logMsg } from "./log";
@@ -118,12 +119,4 @@ export function validateConfig(config: ExtensionConfig): string | null {
   if (config.apiKey.length < 5) return "API key appears too short to be valid.";
 
   return null;
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // The URL parser normalizes IPv4 literals, so a "127." prefix covers 127.0.0.0/8.
-  if (host.startsWith("127.")) return true;
-  return host === "[::1]";
 }

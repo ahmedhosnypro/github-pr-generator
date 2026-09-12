@@ -7,14 +7,8 @@ import type {
 } from "../../github-types";
 import type { CommitInfo, ExtensionConfig, FileChange, FileChangeType } from "../../types";
 import { errorMessage, logMsg } from "../log";
-import {
-  fetchWithTimeout,
-  isValidPrNumber,
-  isValidRepoName,
-  makeGitHubHeaders,
-  rateLimitOrApiError,
-  rateLimitRemaining,
-} from "./common";
+import { makeGitHubHeaders } from "./common";
+import { fetchGitHubJson, prUrl, validatePrContext } from "./request";
 
 interface PageListResult<T> {
   items: T[];
@@ -35,33 +29,10 @@ async function fetchPage(
   const url = baseUrl + "?page=" + String(page) + "&per_page=" + String(perPage);
   logMsg("Fetching " + label + " page " + String(page) + " from: " + url);
 
-  const response = await fetchWithTimeout(url, { method: "GET", headers });
-  logMsg(
-    label +
-      " page " +
-      String(page) +
-      " response status: " +
-      String(response.status) +
-      ", rate limit remaining: " +
-      rateLimitRemaining(response),
-  );
-  if (!response.ok) {
-    const blocked = rateLimitOrApiError(response);
-    if (blocked) return blocked;
-    const errText = await response.text();
-    logMsg(
-      "GitHub API error fetching " +
-        label +
-        " page " +
-        String(page) +
-        ": " +
-        String(response.status) +
-        " - " +
-        errText.substring(0, 200),
-    );
-    return { error: "GITHUB_API_ERROR", status: response.status };
-  }
+  const result = await fetchGitHubJson(label + " page " + String(page), url, { method: "GET", headers });
+  if ("error" in result) return result;
 
+  const response = result;
   const body: unknown = await response.json();
   // GitHub's list endpoints must return arrays; a non-array 2xx (e.g. a proxy
   // or a migrated endpoint returning an object) should NOT silently flow to
@@ -200,16 +171,10 @@ export async function fetchPRCommits(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRCommitsResult> {
-  if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
-    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
-  if (!isValidPrNumber(prNumber)) {
-    logMsg("Invalid PR number: " + prNumber);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
+  const invalid = validatePrContext(owner, repo, prNumber, "Invalid PR number: ");
+  if (invalid) return invalid;
 
-  const baseUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/commits";
+  const baseUrl = prUrl(owner, repo, prNumber) + "/commits";
   logMsg("Fetching PR commits from: " + baseUrl);
   const result = await fetchAllPages<CommitInfo>(config, baseUrl, "PR commits", mapCommitItem);
   if ("items" in result) return { commits: result.items };
@@ -237,16 +202,10 @@ export async function fetchPRFiles(
   repo: string,
   prNumber: string,
 ): Promise<FetchPRFilesResult> {
-  if (!isValidRepoName(owner) || !isValidRepoName(repo)) {
-    logMsg("Invalid owner or repo name - owner: " + owner + ", repo: " + repo);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
-  if (!isValidPrNumber(prNumber)) {
-    logMsg("Invalid PR number: " + prNumber);
-    return { error: "GITHUB_INVALID_CONTEXT" };
-  }
+  const invalid = validatePrContext(owner, repo, prNumber, "Invalid PR number: ");
+  if (invalid) return invalid;
 
-  const baseUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/pulls/" + prNumber + "/files";
+  const baseUrl = prUrl(owner, repo, prNumber) + "/files";
   logMsg("Fetching PR files from: " + baseUrl);
   const result = await fetchAllPages<FileChange>(config, baseUrl, "PR files", mapFileItem);
   if ("items" in result) return { files: result.items };

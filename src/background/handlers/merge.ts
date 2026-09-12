@@ -2,12 +2,11 @@ import type { GenerateMergeDescriptionResponse, GenerateMergeTitleResponse, Open
 import { discoverRepoStyle } from "../github/discovery";
 import { callAPI } from "../llm";
 import { logMsg } from "../log";
-import { parseDescriptionOnlyResponse, parseTitleOnlyResponse } from "../parse";
+import { parseTitleOnlyResponse } from "../parse";
 import { isLikelyTemplate } from "../prompts/common";
 import { buildMergeDescriptionPrompt, buildMergeTitlePrompt } from "../prompts/merge-prompts";
-import { refineDescription } from "../refinement";
 import { buildChangesSummary } from "../summary";
-import { buildStats, extractLinkedIssues, gatherPRData, getValidatedConfig } from "./shared";
+import { buildStats, extractLinkedIssues, gatherPRData, getValidatedConfig, parseAndRefineDescription } from "./shared";
 
 export async function handleGenerateMergeTitle(
   data: OpenedPRData,
@@ -112,28 +111,26 @@ export async function handleGenerateMergeDescription(
   logMsg("handleGenerateMergeDescription - built mergeDescPrompt, length: " + String(mergeDescPrompt.length));
 
   const llmResult = await callAPI(config, mergeDescPrompt, 0.3, onChunk, undefined, undefined, signal);
-  const newDescription = parseDescriptionOnlyResponse(llmResult, { preserveAiDisclosure: style.aiDisclosure });
-  logMsg("handleGenerateMergeDescription - parsed description length: " + String(newDescription.length));
-
   // Same quality loop as the PR description flow: generate → score → refine.
   // Anchors stay off: the merge prompt forbids diff hunk refs (git log, not the
   // PR page) and this flow never calls resolveDiffLinks. preserveAuthored
   // mirrors handlers/description.ts: an authored (non-template) body must
   // survive refinement verbatim.
-  const { description: refinedDescription, finalScore } = await refineDescription(
-    config,
-    gathered.prDetails.title || data.existingTitle || "",
-    newDescription,
-    gathered.commits.map((c) => c.message),
-    false,
-    3, // max iterations
-    10, // target score
-    buildStats(gathered.prDetails, gathered.fileChanges),
-    undefined,
-    preserveAuthored,
-    signal,
+  const { description: refinedDescription, finalScore } = await parseAndRefineDescription(
+    "handleGenerateMergeDescription",
+    {
+      config,
+      styleAiDisclosure: style.aiDisclosure,
+      llmResult,
+      title: gathered.prDetails.title || data.existingTitle || "",
+      commitMessages: gathered.commits.map((c) => c.message),
+      hasAnchors: false,
+      anchorCount: null,
+      stats: buildStats(gathered.prDetails, gathered.fileChanges),
+      preserveAuthored,
+      signal,
+    },
   );
   logMsg("handleGenerateMergeDescription - refinement score: " + String(finalScore));
-
   return { description: refinedDescription };
 }

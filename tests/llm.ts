@@ -2,6 +2,7 @@
 // request body contract. Mocks global fetch — no real network. Stall /
 // no-content-budget / abort coverage lives in tests/llm-resilience.ts.
 import { callAPI, MAX_COMPLETION_TOKENS, NO_CONTENT_TIMEOUT_BASE_MS, noContentTimeoutMs } from "../src/background/llm";
+import type { ExtensionConfig } from "../src/types";
 import { expectMatch, getFailures } from "./expect-helpers";
 import {
   BASE_CONFIG,
@@ -9,9 +10,14 @@ import {
   jsonResponse,
   sseEmptyResponse,
   sseFullResponse,
+  sseReasoningOnlyResponse,
+  sseReasoningThenContentResponse,
   sseSnapshotResponse,
   withFetch,
 } from "./llm-shared";
+
+const REASONING_ONLY_MESSAGE =
+  'The model returned only its thinking and no answer (reasoning consumed the output budget). Set Thinking Effort to "low" or "none" in the popup, or use a model without thinking.';
 
 /** The request body must cap completions at MAX_COMPLETION_TOKENS so long template fills are not truncated. */
 async function testRequestBodyCap(): Promise<void> {
@@ -137,11 +143,108 @@ async function main(): Promise<void> {
     },
   );
 
+  await testReasoningOnlyStream();
+  await testExplicitEffortReasoningOnly();
+  await testNonStreamReasoningOnly();
+  await testReasoningThenContent();
+
   await testRequestBodyCap();
   await testMidMultibyteChunkSplit();
   testNoContentBudgetScaling();
 
   reportOutcome();
+}
+
+/**
+ * Thinking-model starvation (Gemini 3 on default effort): the stream ends
+ * having carried only reasoning_content. Under the out-of-box "default"
+ * effort this is not fail-fast: the one change that resolves the starvation
+ * is a retry with reasoning_effort: "low", capped at a single fallback
+ * attempt — same shape as the transient/empty retries.
+ */
+async function testReasoningOnlyStream(): Promise<void> {
+  let reasoningCalls = 0;
+  await withFetch(
+    () => {
+      reasoningCalls++;
+      return Promise.resolve(reasoningCalls === 1 ? sseReasoningOnlyResponse() : sseFullResponse());
+    },
+    async () => {
+      const out = await callAPI(BASE_CONFIG, "prompt");
+      expectMatch("reasoning starvation falls back to low effort and wins", out, "recovered");
+      expectMatch("exactly two attempts on reasoning starvation", reasoningCalls, 2);
+    },
+  );
+  // Re-run capturing the request bodies to assert the fallback actually sends
+  // reasoning_effort: "low", and only on the fallback attempt.
+  let bodyRunCalls = 0;
+  const efforts: (string | undefined)[] = [];
+  await withFetch(
+    (_url, init) => {
+      bodyRunCalls++;
+      const body = init?.body;
+      efforts.push(
+        (JSON.parse(typeof body === "string" ? body : "{}") as { reasoning_effort?: string }).reasoning_effort,
+      );
+      return Promise.resolve(bodyRunCalls === 1 ? sseReasoningOnlyResponse() : sseFullResponse());
+    },
+    async () => {
+      const out = await callAPI(BASE_CONFIG, "prompt");
+      expectMatch("fallback retry wins", out, "recovered");
+      expectMatch("first attempt omits reasoning_effort (default)", efforts[0], undefined);
+      expectMatch("fallback attempt sends reasoning_effort low", efforts[1], "low");
+      expectMatch("exactly two attempts in body-capture run", bodyRunCalls, 2);
+    },
+  );
+}
+
+/** Under an explicit (non-default) effort the same starvation is fail-fast: the user already picked the knob. */
+async function testExplicitEffortReasoningOnly(): Promise<void> {
+  const config: ExtensionConfig = { ...BASE_CONFIG, thinkingEffort: "high" };
+  let calls = 0;
+  await withFetch(
+    () => {
+      calls++;
+      return Promise.resolve(sseReasoningOnlyResponse());
+    },
+    async () => {
+      const failure = await captureFailure(() => callAPI(config, "prompt"));
+      expectMatch(
+        "explicit-effort reasoning-only gets the thinking diagnosis",
+        failure instanceof Error ? failure.message : null,
+        REASONING_ONLY_MESSAGE,
+      );
+      expectMatch("explicit-effort starvation is not retried", calls, 1);
+    },
+  );
+}
+
+/** The same diagnosis applies to a non-streaming (plain JSON) responder that puts the thinking in message.reasoning_content. */
+async function testNonStreamReasoningOnly(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(jsonResponse({ choices: [{ message: { content: "", reasoning_content: "only thought" } }] })),
+    async () => {
+      const failure = await captureFailure(() => callAPI(BASE_CONFIG, "prompt"));
+      expectMatch(
+        "non-stream reasoning-only gets the same diagnosis",
+        failure instanceof Error ? failure.message : null,
+        REASONING_ONLY_MESSAGE,
+      );
+    },
+  );
+}
+
+/** Healthy thinking stream: reasoning first, then the answer. The result and the streamed chunks carry only the answer — thinking never leaks through. */
+async function testReasoningThenContent(): Promise<void> {
+  await withFetch(
+    () => Promise.resolve(sseReasoningThenContentResponse()),
+    async () => {
+      const chunks: string[] = [];
+      const out = await callAPI(BASE_CONFIG, "prompt", 0.3, (delta) => chunks.push(delta));
+      expectMatch("reasoning-then-content returns the answer", out, "answer");
+      expectMatch("reasoning never reaches onChunk", chunks.join(""), "answer");
+    },
+  );
 }
 
 /** The no-content budget floors at 5 min for small prompts, grows 4ms/char for big ones, caps at 10 min. */

@@ -1,14 +1,15 @@
-import type { ChatCompletionResponse } from "../github-types";
 import type { ExtensionConfig } from "../types";
+import { parseJsonResponseBody, readStreamedCompletion, STREAM_STALL_TIMEOUT_MS, withStallWatchdog } from "./llm-body";
 import { errorMessage, logMsg } from "./log";
 import { SYSTEM_PROMPT } from "./prompts/common";
-import { createSSEParser } from "./sse";
+
+export { STREAM_STALL_TIMEOUT_MS };
 
 // An endpoint that accepts the request and then stalls (or opens SSE and goes
 // silent) would otherwise hang generation forever: the keepalive pings from
 // the content script keep the MV3 worker alive, so nothing else ever times
 // out. Abort when no response/token arrives within this window.
-export const STREAM_STALL_TIMEOUT_MS = 60_000;
+// STREAM_STALL_TIMEOUT_MS and withStallWatchdog live in llm-body.ts (re-exported).
 
 // A budget for *content progress*, not call duration. The failure shapes:
 //  - no response at all (headers never arrive) → the stall watchdog above
@@ -39,14 +40,16 @@ export function noContentTimeoutMs(promptChars: number): number {
 // within common per-model output ceilings.
 export const MAX_COMPLETION_TOKENS = 8192;
 
-function stallError(): Error {
-  return new Error("LLM stream stalled: no tokens for " + String(STREAM_STALL_TIMEOUT_MS / 1000) + "s");
+// Distinct from a plain empty response: a thinking model that streams only
+// reasoning_content (Gemini 3 on its default effort, DeepSeek-R1, …) has
+// consumed the whole output budget on thinking — max_tokens is shared between
+// reasoning and the answer — so the answer never started. Retrying unchanged
+// reproduces it; the message names the knob that fixes it.
+function reasoningOnlyError(): Error {
+  return new Error(
+    'The model returned only its thinking and no answer (reasoning consumed the output budget). Set Thinking Effort to "low" or "none" in the popup, or use a model without thinking.',
+  );
 }
-
-function noContentError(budgetMs: number): Error {
-  return new Error("LLM stream produced no content for " + String(Math.round(budgetMs / 1000)) + "s");
-}
-
 function isAbortException(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
@@ -59,19 +62,6 @@ function abortErrorFrom(signal: AbortSignal): Error {
 }
 
 /** Race a pending fetch/read against the stall watchdog; the timer is cleared on every settle path. */
-function withStallWatchdog<T>(pending: Promise<T>, watchdog: AbortController): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const stall = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const err = stallError();
-      watchdog.abort(err);
-      reject(err);
-    }, STREAM_STALL_TIMEOUT_MS);
-  });
-  return Promise.race([pending, stall]).finally(() => {
-    clearTimeout(timer);
-  });
-}
 
 /** Sleep for `ms`, rejecting promptly when the caller/deadline signal aborts mid-sleep instead of sleeping through a cancel. */
 function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -89,6 +79,17 @@ function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** The request's reasoning_effort field. "default" omits the field so the
+ * provider applies its own effort default — an explicit
+ * `reasoning_effort: "default"` is rejected by upstream routers (observed:
+ * 400 "unknown variant `default`" on the NVIDIA route). The starvation-retry
+ * fallback override wins over both. */
+function reasoningEffortField(config: ExtensionConfig, override?: string): { reasoning_effort?: string } {
+  if (override) return { reasoning_effort: override };
+  if (config.thinkingEffort === "default") return {};
+  return { reasoning_effort: config.thinkingEffort };
+}
+
 async function postChatCompletion(
   url: string,
   config: ExtensionConfig,
@@ -96,6 +97,7 @@ async function postChatCompletion(
   temperature: number,
   signal: AbortSignal,
   watchdog: AbortController,
+  reasoningEffortOverride?: string,
 ): Promise<Response> {
   try {
     return await withStallWatchdog(
@@ -118,8 +120,7 @@ async function postChatCompletion(
           temperature,
           max_tokens: MAX_COMPLETION_TOKENS,
           stream: true,
-          // "default" omits the field so the provider applies its own effort default.
-          ...(config.thinkingEffort === "default" ? {} : { reasoning_effort: config.thinkingEffort }),
+          ...reasoningEffortField(config, reasoningEffortOverride),
         }),
       }),
       watchdog,
@@ -148,119 +149,27 @@ function throwForErrorResponse(response: Response, errorBody: string): never {
   throw new Error("API error " + String(response.status) + ": " + errorBody.substring(0, 200));
 }
 
-/** Incrementally read a text/event-stream response, forwarding each content delta to onChunk. */
-async function readStreamedCompletion(
+/** Read the answer + reasoning out of an SSE stream or a plain JSON body, per content type. */
+async function readResponseContent(
+  contentType: string,
   response: Response,
   onChunk: ((delta: string) => void) | undefined,
   watchdog: AbortController,
   signal: AbortSignal,
   contentBudgetMs: number,
-): Promise<string> {
-  const parser = createSSEParser();
-  const decoder = new TextDecoder();
-  let aggregated = "";
-  // Content-progress timer: unlike the stall watchdog (which any bytes — even
-  // an empty keepalive frame — satisfy), this only resets when real content
-  // progresses: either a content delta arrives, or a NIM-style full-content
-  // snapshot grows. A keepalive-only drip or a stream that never starts is
-  // killed once the budget elapses; a stream that keeps producing tokens gets
-  // unlimited total time no matter how slowly.
-  let contentTimer: ReturnType<typeof setTimeout> | undefined;
-  const armContentTimer = (): void => {
-    clearTimeout(contentTimer);
-    contentTimer = setTimeout(() => {
-      watchdog.abort(noContentError(contentBudgetMs));
-    }, contentBudgetMs);
+): Promise<{ content: string; reasoning: string; fromStream: boolean }> {
+  if (contentType.includes("event-stream")) {
+    const read = await readStreamedCompletion(response, onChunk, watchdog, signal, contentBudgetMs);
+    return { ...read, fromStream: true };
+  }
+  // Watchdog covers a body download that never completes; aborting the
+  // fetch cancels response.text() consumption as well.
+  const json = parseJsonResponseBody(await withStallWatchdog(response.text(), watchdog));
+  return {
+    content: json.choices?.[0]?.message?.content || "",
+    reasoning: json.choices?.[0]?.message?.reasoning_content || "",
+    fromStream: false,
   };
-  armContentTimer();
-  let snapshotLength = 0;
-  const deliver = (deltas: string[]): void => {
-    let gotContent = false;
-    for (const delta of deltas) {
-      if (delta) gotContent = true;
-      aggregated += delta;
-      onChunk?.(delta);
-    }
-    if (gotContent) armContentTimer();
-    // NIM-style snapshot streams: deltas stay empty while message.content
-    // grows frame by frame. That growth is real content progress too — without
-    // re-arming here the stream dies at the budget floor mid-generation.
-    const snapshot = parser.getSnapshot();
-    if (snapshot.length > snapshotLength) {
-      snapshotLength = snapshot.length;
-      armContentTimer();
-    }
-  };
-
-  try {
-    const body = response.body;
-    if (body) {
-      const reader = body.getReader();
-      for (;;) {
-        let read: Awaited<ReturnType<typeof reader.read>>;
-        try {
-          // oxlint-disable-next-line no-await-in-loop -- a stream reader is sequential by nature: chunks must be read in order
-          read = await withStallWatchdog(reader.read(), watchdog);
-        } catch (readErr) {
-          if (signal.aborted) {
-            // Watchdog stall, content timeout, or caller cancel aborted the fetch mid-stream.
-            const reason = abortErrorFrom(signal);
-            logMsg("Stream read aborted: " + reason.message);
-            throw reason;
-          }
-          throw readErr;
-        }
-        if (read.done) break;
-        deliver(parser.push(decoder.decode(read.value, { stream: true })));
-      }
-      deliver(parser.push(decoder.decode()));
-    }
-    deliver(parser.flush());
-
-    if (!aggregated && parser.getSnapshot()) {
-      // Server answered SSE but with full message content instead of deltas (e.g. NVIDIA NIM).
-      aggregated = parser.getSnapshot();
-      onChunk?.(aggregated);
-    }
-    if (!aggregated) {
-      logMsg("SSE: no content aggregated from stream");
-    }
-    return aggregated;
-  } finally {
-    clearTimeout(contentTimer);
-  }
-}
-
-/** Fallback for servers that ignored stream:true and sent a plain (or unlabeled SSE) body. */
-function parseJsonResponseBody(responseText: string): ChatCompletionResponse {
-  // Tolerate an SSE body that arrived without the event-stream content type:
-  // aggregate it with the same parser used by the streaming path.
-  if (/^data:\s/m.test(responseText)) {
-    logMsg("Response body is SSE despite content-type; aggregating chunks");
-    const parser = createSSEParser();
-    const aggregated = parser.push(responseText + "\n").join("") || parser.getSnapshot();
-    return { choices: [{ message: { content: aggregated } }] };
-  }
-
-  // Try strict JSON first; only fall back to stripping a trailing SSE [DONE]
-  // line when parsing fails — stripping unconditionally could eat a legitimate
-  // "data: [DONE]" substring inside a JSON payload and corrupt it.
-  try {
-    return JSON.parse(responseText) as ChatCompletionResponse;
-  } catch (parseErr) {
-    const cleaned = responseText.replace(/\n?data:\s*\[DONE\][^\n]*\s*$/, "").trim();
-    if (cleaned !== responseText.trim()) {
-      logMsg("Stripped trailing SSE data from response");
-      try {
-        return JSON.parse(cleaned) as ChatCompletionResponse;
-      } catch {
-        // fall through to the error below with the original parse error
-      }
-    }
-    logMsg("JSON.parse failed: " + errorMessage(parseErr));
-    logMsg("Response text (first 300): " + responseText.substring(0, 300));
-    throw new Error("Failed to parse API response as JSON: " + errorMessage(parseErr), { cause: parseErr });
-  }
 }
 
 export async function callAPI(
@@ -287,6 +196,7 @@ async function callAPIAttempt(
   allowEmptyRetry: boolean,
   allowTransientRetry: boolean,
   callerSignal: AbortSignal | undefined,
+  reasoningEffortOverride?: string,
 ): Promise<string> {
   const watchdog = new AbortController();
   // Caller cancel and the stall watchdog share one signal toward fetch;
@@ -305,13 +215,67 @@ async function callAPIAttempt(
       ", temperature: " +
       String(temperature) +
       ", reasoning_effort: " +
-      config.thinkingEffort +
+      (reasoningEffortOverride ?? config.thinkingEffort) +
       ", prompt chars: " +
       String(prompt.length),
   );
 
   const requestStarted = Date.now();
-  const response = await postChatCompletion(url, config, prompt, temperature, signal, watchdog);
+  const response = await postChatCompletion(
+    url,
+    config,
+    prompt,
+    temperature,
+    signal,
+    watchdog,
+    reasoningEffortOverride,
+  );
+  if (response.ok) {
+    return consumeResponse(
+      config,
+      prompt,
+      temperature,
+      onChunk,
+      allowEmptyRetry,
+      callerSignal,
+      reasoningEffortOverride,
+      response,
+      watchdog,
+      signal,
+      requestStarted,
+    );
+  }
+  return handleErrorResponse(
+    config,
+    prompt,
+    temperature,
+    onChunk,
+    allowEmptyRetry,
+    allowTransientRetry,
+    callerSignal,
+    response,
+    watchdog,
+    signal,
+  );
+}
+
+/** Handle a non-ok response: one transient retry with backoff, then a classified throw. */
+async function handleErrorResponse(
+  config: ExtensionConfig,
+  prompt: string,
+  temperature: number,
+  onChunk: ((delta: string) => void) | undefined,
+  allowEmptyRetry: boolean,
+  allowTransientRetry: boolean,
+  callerSignal: AbortSignal | undefined,
+  response: Response,
+  watchdog: AbortController,
+  signal: AbortSignal,
+): Promise<string> {
+  // A server can send an error status and then stall its body; read it
+  // under the watchdog so that hang fails fast instead of freezing here.
+  const errBody = await withStallWatchdog(response.text(), watchdog);
+  logMsg("API response status: " + String(response.status));
   // Transient 5xx/429s — retry once with backoff. The LLM serving layer is
   // flaky enough (observed 503s mid-run) that a single retry saves a refinement
   // iteration from dying to what is a momentary infrastructure hiccup. Gateway
@@ -319,41 +283,56 @@ async function callAPIAttempt(
   // upstream provider's quota tripping (observed on the free gemini route) —
   // the same key works seconds later, so that specific 400 retries too. A
   // genuinely bad key just fails again after the single retry.
-  if (!response.ok) {
-    // A server can send an error status and then stall its body; read it
-    // under the watchdog so that hang fails fast instead of freezing here.
-    const errBody = await withStallWatchdog(response.text(), watchdog);
-    logMsg("API response status: " + String(response.status));
-    if (allowTransientRetry) {
-      const transient =
-        [429, 500, 502, 503, 504].includes(response.status) ||
-        (response.status === 400 && /API key not valid/i.test(errBody));
-      if (transient) {
-        logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
-        await sleepOrAbort(2000, signal);
-        return callAPIAttempt(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal);
-      }
-    }
-    throwForErrorResponse(response, errBody);
+  const transient =
+    [429, 500, 502, 503, 504].includes(response.status) ||
+    (response.status === 400 && /API key not valid/i.test(errBody));
+  if (transient && allowTransientRetry) {
+    logMsg("Transient API error " + String(response.status) + " — retrying once after 2s");
+    await sleepOrAbort(2000, signal);
+    return callAPIAttempt(config, prompt, temperature, onChunk, allowEmptyRetry, false, callerSignal);
   }
+  throwForErrorResponse(response, errBody);
+}
 
+/** Consume a successful response: read the answer, apply the starvation/empty retries, surface the result. */
+async function consumeResponse(
+  config: ExtensionConfig,
+  prompt: string,
+  temperature: number,
+  onChunk: ((delta: string) => void) | undefined,
+  allowEmptyRetry: boolean,
+  callerSignal: AbortSignal | undefined,
+  reasoningEffortOverride: string | undefined,
+  response: Response,
+  watchdog: AbortController,
+  signal: AbortSignal,
+  requestStarted: number,
+): Promise<string> {
   const contentType = response.headers.get("content-type") || "";
-  let content: string;
-  let fromStream: boolean;
-  if (contentType.includes("event-stream")) {
-    content = await readStreamedCompletion(response, onChunk, watchdog, signal, noContentTimeoutMs(prompt.length));
-    fromStream = true;
-  } else {
-    // Watchdog covers a body download that never completes; aborting the
-    // fetch cancels response.text() consumption as well. A plain body has no
-    // incremental progress signal, so the size of the prompt does not extend
-    // this 60s window the way it extends the streaming no-content budget.
-    const json = parseJsonResponseBody(await withStallWatchdog(response.text(), watchdog));
-    content = json.choices?.[0]?.message?.content || "";
-    fromStream = false;
-  }
-
-  if (!content) {
+  const read = await readResponseContent(
+    contentType,
+    response,
+    onChunk,
+    watchdog,
+    signal,
+    noContentTimeoutMs(prompt.length),
+  );
+  if (!read.content) {
+    // A stream that ended with non-empty reasoning but no answer means the
+    // model's thinking consumed the whole output budget (max_tokens is shared
+    // between reasoning and the answer). Under the out-of-box "default" effort
+    // the provider's own default thinking is what starved the answer, so
+    // retrying with reasoning_effort: "low" is the one change that resolves
+    // it — same shape as the empty/transient single retries below. Under any
+    // explicit effort the user already picked the knob, so fail fast.
+    if (read.reasoning) {
+      logMsg("Stream carried reasoning_content but no answer content");
+      if (config.thinkingEffort === "default" && reasoningEffortOverride === undefined) {
+        logMsg('Default-effort thinking starvation — retrying once with reasoning_effort: "low"');
+        return callAPIAttempt(config, prompt, temperature, onChunk, false, false, callerSignal, "low");
+      }
+      throw reasoningOnlyError();
+    }
     // Empty stream aggregation happens on transient server hiccups (observed
     // in parallel lab runs); retry the whole request once before failing.
     if (allowEmptyRetry) {
@@ -365,13 +344,13 @@ async function callAPIAttempt(
     throw new Error("No content in API response");
   }
 
-  if (!fromStream) onChunk?.(content); // non-streaming endpoint: surface the whole answer as one chunk
+  if (!read.fromStream) onChunk?.(read.content); // non-streaming endpoint: surface the whole answer as one chunk
   logMsg(
     "API call took " +
       ((Date.now() - requestStarted) / 1000).toFixed(1) +
       "s — content length: " +
-      String(content.length) +
-      (fromStream ? " (from stream)" : ""),
+      String(read.content.length) +
+      (read.fromStream ? " (from stream)" : ""),
   );
-  return content.trim();
+  return read.content.trim();
 }

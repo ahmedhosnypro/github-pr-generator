@@ -1,9 +1,8 @@
 // Unit tests for the background service-worker side of the port streaming
 // channel: src/background/stream.ts registerStreamListener — port-name gating,
-// keepalive pings, unknown requests, and the disconnect-mid-generation abort
-// (the fix this file exists to pin down): when the tab goes away, the
-// in-flight LLM job is aborted and NO error is posted to the dead port.
-// The content-script half lives in port-stream.ts.
+// keepalive pings, unknown requests, disconnect-mid-generation abort (the tab
+// goes away → the in-flight job is aborted, no error posted to the dead port),
+// and two-port isolation. The content-script half lives in port-stream.ts.
 //
 // Only the port wiring is under test, so the generation handlers are mocked
 // (Bun's mock.module works in plain scripts): each "generate" call parks on a
@@ -11,7 +10,7 @@
 // the listener handed the job — that signal IS the disconnect-fix contract.
 import { mock } from "bun:test";
 import { expectMatch, getFailures } from "./expect-helpers";
-import { countLogs, FakePort, settleTicks } from "./port-stream-shared";
+import { chunksOn, countLogs, doneTitles, FakePort, settleTicks } from "./port-stream-shared";
 
 const connectListeners: Array<(port: FakePort) => void> = [];
 
@@ -49,6 +48,40 @@ function parkedCall(index: number): RecordedGenerateCall {
   const call = generateCalls[index];
   if (!call) throw new Error("test bug: expected a parked generate call");
   return call;
+}
+
+// Start a generation on a port and wait for it to park, returning the parked
+// call — the standard "job started" preamble of the disconnect tests.
+async function startParkedJob(port: FakePort, data: unknown): Promise<RecordedGenerateCall> {
+  const callsBefore = generateCalls.length;
+  port.emitMessage({ type: "generate", data });
+  await settleTicks();
+  expectMatch("job started before disconnect", generateCalls.length, callsBefore + 1);
+  return parkedCall(callsBefore);
+}
+
+// Log capture + port connect preamble shared by the disconnect tests: swaps
+// console.log for a recording array, connects one FakePort, and hands back a
+// restore function for the finally block.
+function setupLoggedPort(connect: (port: FakePort) => void): {
+  port: FakePort;
+  logs: string[];
+  restoreLogs: () => void;
+} {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]): void => {
+    logs.push(args.map(String).join(" "));
+  };
+  const port = new FakePort();
+  connect(port);
+  return {
+    port,
+    logs,
+    restoreLogs: (): void => {
+      console.log = originalLog;
+    },
+  };
 }
 
 function mockGenerationHandlers(): void {
@@ -119,10 +152,7 @@ async function testBackgroundCompletes(): Promise<void> {
   call.onChunk("add thing");
   call.resolve({ title: "fix: add thing", description: "body" });
   await settleTicks();
-  const chunkTexts = port.posted
-    .filter((m): m is { kind: "chunk"; text: string } => (m as { kind?: string }).kind === "chunk")
-    .map((m) => m.text);
-  expectMatch("chunks forwarded to the port in order", chunkTexts.join(""), "fix: add thing");
+  expectMatch("chunks forwarded to the port in order", chunksOn(port), "fix: add thing");
   const done = port.posted.filter((m) => (m as { kind?: string }).kind === "done");
   expectMatch("one done message posted", done.length, 1);
   expectMatch(
@@ -137,20 +167,9 @@ async function testBackgroundCompletes(): Promise<void> {
 }
 
 async function testBackgroundDisconnectAbortsMidGeneration(): Promise<void> {
-  const connect = connectListener();
-  const logs: string[] = [];
-  const originalLog = console.log;
-  console.log = (...args: unknown[]): void => {
-    logs.push(args.map(String).join(" "));
-  };
+  const { port, logs, restoreLogs } = setupLoggedPort(connectListener());
   try {
-    const port = new FakePort();
-    connect(port);
-    const callsBefore = generateCalls.length;
-    port.emitMessage({ type: "generate", data: {} });
-    await settleTicks();
-    expectMatch("job started before disconnect", generateCalls.length, callsBefore + 1);
-    const call = parkedCall(callsBefore);
+    const call = await startParkedJob(port, {});
     expectMatch("job received an abort signal", call.signal !== undefined, true);
 
     // Tab navigated away mid-generation: disconnect must abort the job.
@@ -188,24 +207,17 @@ async function testBackgroundDisconnectAbortsMidGeneration(): Promise<void> {
       1,
     );
   } finally {
-    console.log = originalLog;
+    restoreLogs();
   }
 }
 
 async function testBackgroundDisconnectAbortsAllInFlightJobs(): Promise<void> {
-  const connect = connectListener();
-  const logs: string[] = [];
-  const originalLog = console.log;
-  console.log = (...args: unknown[]): void => {
-    logs.push(args.map(String).join(" "));
-  };
+  const { port, logs, restoreLogs } = setupLoggedPort(connectListener());
   try {
     // One port, three concurrent generation jobs. The listener tracks each in
     // its own AbortController (a Set per port), so ONE disconnect must abort
     // every job still in flight — a shared controller or last-job bookkeeping
     // would strand jobs 2 and 3 streaming into the void.
-    const port = new FakePort();
-    connect(port);
     const callsBefore = generateCalls.length;
     port.emitMessage({ type: "generate", data: {} });
     port.emitMessage({ type: "generate", data: {} });
@@ -233,21 +245,16 @@ async function testBackgroundDisconnectAbortsAllInFlightJobs(): Promise<void> {
     expectMatch("both aborted rejections logged", countLogs(logs, "stream request aborted (generate)"), 2);
     expectMatch("no error posts for any aborted job", port.errorPosts().length, 0);
   } finally {
-    console.log = originalLog;
+    restoreLogs();
   }
 }
 
 async function testBackgroundDisconnectWithoutJob(): Promise<void> {
-  const connect = connectListener();
-  const logs: string[] = [];
-  const originalLog = console.log;
-  console.log = (...args: unknown[]): void => {
-    logs.push(args.map(String).join(" "));
-  };
+  const { logs, restoreLogs } = setupLoggedPort(connectListener());
   try {
     // Disconnect with no request ever sent: no in-flight job, nothing to abort.
     const idle = new FakePort();
-    connect(idle);
+    connectListener()(idle);
     idle.emitDisconnect();
     await settleTicks();
     expectMatch("idle disconnect never aborts", countLogs(logs, "stream port disconnected mid-generation"), 0);
@@ -255,7 +262,7 @@ async function testBackgroundDisconnectWithoutJob(): Promise<void> {
     // Disconnect arriving right after the job settled (error already posted):
     // the jobInFlight flag is cleared by finally, so no stale abort fires.
     const finished = new FakePort();
-    connect(finished);
+    connectListener()(finished);
     finished.emitMessage({ type: "definitely-not-a-real-type" });
     await settleTicks();
     expectMatch("job posted its error before disconnect", finished.errorPosts().length, 1);
@@ -267,21 +274,16 @@ async function testBackgroundDisconnectWithoutJob(): Promise<void> {
       0,
     );
   } finally {
-    console.log = originalLog;
+    restoreLogs();
   }
 }
 
 async function testBackgroundReconnectFreshController(): Promise<void> {
-  const connect = connectListener();
-  const logs: string[] = [];
-  const originalLog = console.log;
-  console.log = (...args: unknown[]): void => {
-    logs.push(args.map(String).join(" "));
-  };
+  const { logs, restoreLogs } = setupLoggedPort(connectListener());
   try {
     // Connection 1: abort its in-flight job (same flow as the abort test).
     const first = new FakePort();
-    connect(first);
+    connectListener()(first);
     const callsBefore1 = generateCalls.length;
     first.emitMessage({ type: "generate", data: {} });
     await settleTicks();
@@ -297,7 +299,7 @@ async function testBackgroundReconnectFreshController(): Promise<void> {
     // without a disconnect: because its signal is NOT aborted, the rejection
     // surfaces as a real error post to the (live) port.
     const second = new FakePort();
-    connect(second);
+    connectListener()(second);
     const callsBefore2 = generateCalls.length;
     second.emitMessage({ type: "generate", data: {} });
     await settleTicks();
@@ -309,8 +311,45 @@ async function testBackgroundReconnectFreshController(): Promise<void> {
     expectMatch("reconnected failure logged as a real error", countLogs(logs, "stream request error (generate)"), 1);
     expectMatch("reconnect itself does not abort", countLogs(logs, "stream port disconnected mid-generation"), 1);
   } finally {
-    console.log = originalLog;
+    restoreLogs();
   }
+}
+
+async function testBackgroundTwoPortsInterleaved(): Promise<void> {
+  const connect = connectListener();
+  // Two tabs = two ports: each port must receive only its own job's chunks
+  // and its own done payload — a routing mixup would stream one tab's
+  // generation into the other.
+  const portA = new FakePort();
+  const portB = new FakePort();
+  connect(portA);
+  connect(portB);
+  const callsBefore = generateCalls.length;
+  portA.emitMessage({ type: "generate", data: {} });
+  portB.emitMessage({ type: "generate", data: {} });
+  await settleTicks();
+  expectMatch("both ports started a job", generateCalls.length, callsBefore + 2);
+  const [callA, callB] = [parkedCall(callsBefore), parkedCall(callsBefore + 1)];
+
+  callA.onChunk("A1 ");
+  callB.onChunk("B1 ");
+  callA.onChunk("A2 ");
+  callB.onChunk("B2 ");
+  callA.resolve({ title: "A title", description: "" });
+  await settleTicks();
+  callB.resolve({ title: "B title", description: "" });
+  await settleTicks();
+
+  expectMatch("port A received only A's chunks", chunksOn(portA), "A1 A2 ");
+  expectMatch("port B received only B's chunks", chunksOn(portB), "B1 B2 ");
+  expectMatch("port A got its own done payload", doneTitles(portA), "A title");
+  expectMatch("port B got its own done payload", doneTitles(portB), "B title");
+
+  // A post-settle ping on A must start no new job and never touch B's state.
+  portA.emitMessage({ type: "__keepalive_ping__" });
+  await settleTicks();
+  expectMatch("post-settle ping starts no new job", generateCalls.length, callsBefore + 2);
+  expectMatch("port B received nothing from A's messages", chunksOn(portB), "B1 B2 ");
 }
 
 console.log("=== Port Stream Tests (background side) ===\n");
@@ -331,6 +370,7 @@ await testBackgroundDisconnectAbortsMidGeneration();
 await testBackgroundDisconnectAbortsAllInFlightJobs();
 await testBackgroundDisconnectWithoutJob();
 await testBackgroundReconnectFreshController();
+await testBackgroundTwoPortsInterleaved();
 
 const failures = getFailures();
 if (failures > 0) {

@@ -1,6 +1,8 @@
 // Shared DOM fixtures for the compare-page content-script tests
 // (content-compare.ts, content-compare-generate.ts, content-compare-log.ts).
 // Importing this module installs the dom-stub globals via its own import.
+// toastState() here is also the single copy reused by the opened-PR and
+// merge-dialog test fixtures.
 import type { StubElement } from "./dom-stub";
 import { h, resetPage } from "./dom-stub";
 

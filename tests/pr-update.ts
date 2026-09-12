@@ -5,8 +5,9 @@
 // PROPOSE, apply handlers PATCH exactly the user-approved text.
 import { fetchPRDetails, updatePRField } from "../src/background/github/pr";
 import type { FetchPRDetailsResult, PRUpdateFields, UpdatePRResult } from "../src/github-types";
-import type { ExtensionConfig } from "../src/types";
 import { expectIncludes, expectMatch, getFailures } from "./expect-helpers";
+import type { FetchImpl } from "./fetch-mock";
+import { BASE_CONFIG, jsonResponse, urlString, withFetch } from "./fetch-mock";
 import {
   captureRejection,
   chainHandlers,
@@ -29,37 +30,7 @@ const { handleApplyDescriptionUpdate, handleGenerateDescription } = await import
 const OPENED = { owner: "octo", repo: "demo", prNumber: "123" };
 const TOKEN_MESSAGE_BASE = "GitHub Personal Access Token is required to update PR";
 
-const BASE_CONFIG: ExtensionConfig = {
-  apiEndpoint: "https://probe.invalid/v1",
-  apiKey: "k",
-  model: "m",
-  githubToken: "gh-token",
-  diffEnabled: false,
-  diffMaxLines: 10,
-  diffMaxBytes: 100,
-  thinkingEffort: "default",
-};
-
 const FIELDS: PRUpdateFields = { title: "New title", body: "New body" };
-
-type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-function jsonResponse(payload: object, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
-}
-
-function withFetch(impl: FetchImpl, fn: () => Promise<void>): Promise<void> {
-  const original = globalThis.fetch;
-  globalThis.fetch = impl as typeof fetch;
-  return fn().finally(() => {
-    globalThis.fetch = original;
-  });
-}
-
-function urlString(url: string | URL | Request): string {
-  if (typeof url === "string") return url;
-  return url instanceof URL ? url.href : url.url;
-}
 
 // (1) No githubToken → GITHUB_NO_TOKEN, fetch never called.
 async function testNoToken(): Promise<void> {
@@ -273,20 +244,21 @@ async function testApplySurfacesPatchFailure(): Promise<void> {
   );
 }
 
+async function runFetchDetails(payload: object): Promise<FetchPRDetailsResult> {
+  let out: FetchPRDetailsResult = { error: "GITHUB_API_ERROR" };
+  await withFetch(
+    () => Promise.resolve(jsonResponse(payload)),
+    async () => {
+      out = await fetchPRDetails(BASE_CONFIG, "octocat", "hello-world", "42");
+    },
+  );
+  return out;
+}
+
 // (3b) fetchPRDetails maps the API response; a same-repo head label
 // "owner:branch" folds back to the bare ref while a fork keeps its label.
 async function testFetchDetailsMapsFields(): Promise<void> {
-  async function run(payload: object): Promise<FetchPRDetailsResult> {
-    let out: FetchPRDetailsResult = { error: "GITHUB_API_ERROR" };
-    await withFetch(
-      () => Promise.resolve(jsonResponse(payload)),
-      async () => {
-        out = await fetchPRDetails(BASE_CONFIG, "octocat", "hello-world", "42");
-      },
-    );
-    return out;
-  }
-  const same = await run({
+  const same = await runFetchDetails({
     title: "T",
     base: { ref: "main" },
     head: { ref: "feature", label: "octocat:feature", repo: { full_name: "octocat/hello-world" } },
@@ -307,7 +279,7 @@ async function testFetchDetailsMapsFields(): Promise<void> {
   ];
   for (const [name, head, expected] of labelCases) {
     // oxlint-disable-next-line no-await-in-loop -- each scenario re-spies global fetch; scenarios must not interleave
-    const out = await run({ title: "T", base: { ref: "main" }, head });
+    const out = await runFetchDetails({ title: "T", base: { ref: "main" }, head });
     expectMatch(name, "title" in out && out.headBranch, expected);
   }
 }

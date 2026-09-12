@@ -192,7 +192,7 @@ export function renderedLineLength(line: string): number {
   return line.replace(/\]\([^)]*\)/g, "]").length;
 }
 
-function proseMetrics(description: string): { maxProse: number; maxBullet: number } {
+export function proseMetrics(description: string): { maxProse: number; maxBullet: number } {
   let inFence = false;
   let maxProse = 0;
   let maxBullet = 0;

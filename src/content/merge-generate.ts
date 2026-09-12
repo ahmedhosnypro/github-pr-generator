@@ -1,4 +1,5 @@
 import type { GenerateMergeDescriptionResponse, GenerateMergeTitleResponse } from "../responses";
+import type { OpenedPRData } from "../types";
 import { BTN_MERGE_DESC_ID, BTN_MERGE_TITLE_ID } from "./constants";
 import { clearButtonLoading, createStreamingFill, getButton, setButtonLoading, setReactValue, showToast } from "./dom";
 import { errorMessage, errorStack } from "./errors";
@@ -21,9 +22,11 @@ import { streamFromBackground } from "./stream";
 // Tracks a streaming fill plus the field value captured before the stream
 // started, so an empty final parse or a mid-stream error can roll the field
 // back instead of leaving partial streamed text committed.
+type MergeFieldElement = HTMLInputElement | HTMLTextAreaElement;
+
 interface StreamedField {
   fill: ReturnType<typeof createStreamingFill> | null;
-  element: HTMLInputElement | HTMLTextAreaElement | null;
+  element: MergeFieldElement | null;
   prior: string | null;
 }
 
@@ -31,11 +34,7 @@ function newStreamedField(): StreamedField {
   return { fill: null, element: null, prior: null };
 }
 
-function updateStreamedField(
-  field: StreamedField,
-  find: () => HTMLInputElement | HTMLTextAreaElement | null,
-  value: string,
-): void {
+function updateStreamedField(field: StreamedField, find: () => MergeFieldElement | null, value: string): void {
   if (!field.fill) {
     const el = find();
     if (el) {
@@ -54,133 +53,132 @@ function rollbackStreamedField(field: StreamedField): boolean {
   return true;
 }
 
-export async function handleGenerateMergeTitle(): Promise<void> {
-  const btn = getButton(BTN_MERGE_TITLE_ID);
-  if (!btn || btn.disabled) {
-    log("warn", "Merge title button not found or disabled");
-    return;
-  }
-  setButtonLoading(btn);
-  const mergeDescBtn = getButton(BTN_MERGE_DESC_ID);
-  if (mergeDescBtn) setButtonLoading(mergeDescBtn);
+type MergeGenerateData = Omit<OpenedPRData, "owner" | "repo" | "prNumber">;
+type MergeGenerateResponse = GenerateMergeTitleResponse | GenerateMergeDescriptionResponse;
 
-  try {
-    await generateMergeTitle();
-  } catch (err) {
-    log("error", "Error in handleGenerateMergeTitle: " + errorMessage(err) + " | Stack: " + errorStack(err));
-    showToast("Error: " + errorMessage(err), true);
-  } finally {
-    clearButtonLoading(btn);
-    if (mergeDescBtn) clearButtonLoading(mergeDescBtn);
-  }
+// Everything that differs between the merge title and merge description
+// streaming flows: button wiring, scraped fields, target field, response
+// accessor, and toasts. The shared runner in streamMergeResult drives both.
+interface MergeGenerateFlowSpec<T extends MergeGenerateResponse> {
+  buttonId: string;
+  siblingButtonId: string;
+  notFoundLog: string;
+  handlerName: string;
+  requestType: "generateMergeTitle" | "generateMergeDescription";
+  collect: () => MergeGenerateData;
+  findField: () => MergeFieldElement | null;
+  resultText: (response: T) => string;
+  apply: (text: string) => void;
+  successToast: string;
+  emptyRestoredToast: string;
+  emptyNothingToast: string;
 }
 
-async function generateMergeTitle(): Promise<void> {
-  const ctx = extractOwnerRepoPRNumber();
-  const existingTitle = extractExistingOpenedTitle();
-  const existingMergeTitle = extractExistingMergeTitle();
-  const branchContext = extractBranchContext();
-  const existingDescription = extractExistingOpenedDescription();
-  if (!ctx.owner || !ctx.repo || !ctx.prNumber) {
-    showToast("Could not determine PR owner/repo/number from URL.", true);
-    return;
-  }
-  log("info", "handleGenerateMergeTitle - " + JSON.stringify(ctx));
-  let accumulated = "";
-  const field = newStreamedField();
-  let response: GenerateMergeTitleResponse;
-  try {
-    response = await streamFromBackground<GenerateMergeTitleResponse>(
-      {
-        type: "generateMergeTitle",
-        data: {
-          owner: ctx.owner,
-          repo: ctx.repo,
-          prNumber: ctx.prNumber,
-          existingTitle,
-          existingMergeTitle,
-          existingDescription,
-          branchContext,
-        },
-      },
-      (delta) => {
-        accumulated += delta;
-        updateStreamedField(field, findMergeTitleInput, accumulated);
-      },
-    );
-  } catch (err) {
-    if (rollbackStreamedField(field)) {
-      throw new Error(errorMessage(err) + " (the partial streamed text was rolled back)", { cause: err });
-    }
-    throw err;
-  }
-  field.fill?.finish();
-  if (response.title.trim().length > 0) {
-    fillMergeFields(response.title, "");
-    showToast("Merge commit title generated!");
-  } else if (rollbackStreamedField(field)) {
-    // The parse came back empty after partial text was already committed —
-    // restore the pre-stream value instead of leaving a truncated title.
-    showToast("Merge title was empty — restored the previous title.", true);
-  } else {
-    showToast("Merge title was empty — nothing applied.", true);
-  }
+const MERGE_TITLE_FLOW: MergeGenerateFlowSpec<GenerateMergeTitleResponse> = {
+  buttonId: BTN_MERGE_TITLE_ID,
+  siblingButtonId: BTN_MERGE_DESC_ID,
+  notFoundLog: "Merge title button not found or disabled",
+  handlerName: "handleGenerateMergeTitle",
+  requestType: "generateMergeTitle",
+  collect: () => {
+    const existingTitle = extractExistingOpenedTitle();
+    const existingMergeTitle = extractExistingMergeTitle();
+    const branchContext = extractBranchContext();
+    const existingDescription = extractExistingOpenedDescription();
+    return { existingTitle, existingMergeTitle, existingDescription, branchContext };
+  },
+  findField: findMergeTitleInput,
+  resultText: (response) => {
+    return response.title;
+  },
+  apply: (text) => {
+    fillMergeFields(text, "");
+  },
+  successToast: "Merge commit title generated!",
+  emptyRestoredToast: "Merge title was empty — restored the previous title.",
+  emptyNothingToast: "Merge title was empty — nothing applied.",
+};
+
+const MERGE_DESC_FLOW: MergeGenerateFlowSpec<GenerateMergeDescriptionResponse> = {
+  buttonId: BTN_MERGE_DESC_ID,
+  siblingButtonId: BTN_MERGE_TITLE_ID,
+  notFoundLog: "Merge desc button not found or disabled",
+  handlerName: "handleGenerateMergeDescription",
+  requestType: "generateMergeDescription",
+  collect: () => {
+    const existingTitle = extractExistingOpenedTitle();
+    const existingMergeTitle = extractExistingMergeTitle();
+    const existingDescription = extractExistingOpenedDescription();
+    const existingMergeDescription = extractExistingMergeDescription();
+    const branchContext = extractBranchContext();
+    return { existingTitle, existingMergeTitle, existingDescription, existingMergeDescription, branchContext };
+  },
+  findField: findMergeDescTextarea,
+  resultText: (response) => {
+    return response.description;
+  },
+  apply: (text) => {
+    fillMergeFields("", text);
+  },
+  successToast: "Merge commit description generated!",
+  emptyRestoredToast: "Merge description was empty — restored the previous description.",
+  emptyNothingToast: "Merge description was empty — nothing applied.",
+};
+
+export async function handleGenerateMergeTitle(): Promise<void> {
+  await runMergeGenerateFlow(MERGE_TITLE_FLOW);
 }
 
 export async function handleGenerateMergeDescription(): Promise<void> {
-  const btn = getButton(BTN_MERGE_DESC_ID);
+  await runMergeGenerateFlow(MERGE_DESC_FLOW);
+}
+
+async function runMergeGenerateFlow<T extends MergeGenerateResponse>(spec: MergeGenerateFlowSpec<T>): Promise<void> {
+  const btn = getButton(spec.buttonId);
   if (!btn || btn.disabled) {
-    log("warn", "Merge desc button not found or disabled");
+    log("warn", spec.notFoundLog);
     return;
   }
   setButtonLoading(btn);
-  const mergeTitleBtn = getButton(BTN_MERGE_TITLE_ID);
-  if (mergeTitleBtn) setButtonLoading(mergeTitleBtn);
+  const siblingBtn = getButton(spec.siblingButtonId);
+  if (siblingBtn) setButtonLoading(siblingBtn);
 
   try {
-    await generateMergeDescription();
+    await streamMergeResult(spec);
   } catch (err) {
-    log("error", "Error in handleGenerateMergeDescription: " + errorMessage(err) + " | Stack: " + errorStack(err));
+    log("error", "Error in " + spec.handlerName + ": " + errorMessage(err) + " | Stack: " + errorStack(err));
     showToast("Error: " + errorMessage(err), true);
   } finally {
     clearButtonLoading(btn);
-    if (mergeTitleBtn) clearButtonLoading(mergeTitleBtn);
+    if (siblingBtn) clearButtonLoading(siblingBtn);
   }
 }
 
-async function generateMergeDescription(): Promise<void> {
+async function streamMergeResult<T extends MergeGenerateResponse>(spec: MergeGenerateFlowSpec<T>): Promise<void> {
   const ctx = extractOwnerRepoPRNumber();
-  const existingTitle = extractExistingOpenedTitle();
-  const existingMergeTitle = extractExistingMergeTitle();
-  const existingDescription = extractExistingOpenedDescription();
-  const existingMergeDesc = extractExistingMergeDescription();
-  const branchContext = extractBranchContext();
+  const existing = spec.collect();
   if (!ctx.owner || !ctx.repo || !ctx.prNumber) {
     showToast("Could not determine PR owner/repo/number from URL.", true);
     return;
   }
-  log("info", "handleGenerateMergeDescription - " + JSON.stringify(ctx));
+  log("info", spec.handlerName + " - " + JSON.stringify(ctx));
   let accumulated = "";
   const field = newStreamedField();
-  let response: GenerateMergeDescriptionResponse;
+  let response: T;
   try {
-    response = await streamFromBackground<GenerateMergeDescriptionResponse>(
+    response = await streamFromBackground<T>(
       {
-        type: "generateMergeDescription",
+        type: spec.requestType,
         data: {
           owner: ctx.owner,
           repo: ctx.repo,
           prNumber: ctx.prNumber,
-          existingTitle,
-          existingMergeTitle,
-          existingDescription,
-          existingMergeDescription: existingMergeDesc,
-          branchContext,
+          ...existing,
         },
       },
       (delta) => {
         accumulated += delta;
-        updateStreamedField(field, findMergeDescTextarea, accumulated);
+        updateStreamedField(field, spec.findField, accumulated);
       },
     );
   } catch (err) {
@@ -190,12 +188,15 @@ async function generateMergeDescription(): Promise<void> {
     throw err;
   }
   field.fill?.finish();
-  if (response.description.trim().length > 0) {
-    fillMergeFields("", response.description);
-    showToast("Merge commit description generated!");
+  const text = spec.resultText(response);
+  if (text.trim().length > 0) {
+    spec.apply(text);
+    showToast(spec.successToast);
   } else if (rollbackStreamedField(field)) {
-    showToast("Merge description was empty — restored the previous description.", true);
+    // The parse came back empty after partial text was already committed —
+    // restore the pre-stream value instead of leaving truncated text.
+    showToast(spec.emptyRestoredToast, true);
   } else {
-    showToast("Merge description was empty — nothing applied.", true);
+    showToast(spec.emptyNothingToast, true);
   }
 }

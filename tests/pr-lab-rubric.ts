@@ -3,7 +3,7 @@
 // (analysis/pull-requests/PRESENTATION.md) or the sirajLMS/siraj#119 incident.
 import { countCoveredCommits, coverageThreshold, listedCommits } from "../src/background/commit-coverage";
 import { countDiffAnchors } from "../src/background/parse";
-import { renderedLineLength } from "../src/background/refinement-checks";
+import { proseMetrics } from "../src/background/refinement-checks";
 
 export interface RubricCheck {
   name: string;
@@ -11,8 +11,8 @@ export interface RubricCheck {
   detail: string;
 }
 
-function sectionSlice(text: string, header: string): string {
-  const start = text.search(new RegExp("^## " + header, "im"));
+function sliceSection(text: string, startPattern: RegExp): string {
+  const start = text.search(startPattern);
   if (start === -1) return "";
   const rest = text.slice(start);
   const next = rest.indexOf("\n## ", 2);
@@ -35,11 +35,7 @@ function summarySlice(text: string): string {
 // synonyms. The slice stops only at the next H2 so steps nested under H3
 // subgroups inside the section stay in scope.
 function testingSlice(text: string): string {
-  const start = text.search(/^#{2,3} (?:Testing|Verification|How to test)\b/im);
-  if (start === -1) return "";
-  const rest = text.slice(start);
-  const next = rest.indexOf("\n## ", 2);
-  return next === -1 ? rest : rest.slice(0, next);
+  return sliceSection(text, /^#{2,3} (?:Testing|Verification|How to test)\b/im);
 }
 
 function sentenceCount(text: string): number {
@@ -150,23 +146,7 @@ function checkFences(fences: number, opts: RubricOptions): RubricCheck {
 }
 
 function checkLineLengths(description: string): RubricCheck {
-  let inFence = false;
-  let maxProse = 0;
-  let maxBullet = 0;
-  for (const line of description.split("\n")) {
-    if (line.trim().startsWith("```")) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    // Rendered length, not raw markdown: link URL payloads (e.g. the ~110-char
-    // diffhunk targets) are invisible in the PR body — see renderedLineLength.
-    if (/^[-*]\s/.test(line) || line.startsWith("|")) {
-      maxBullet = Math.max(maxBullet, renderedLineLength(line));
-    } else {
-      maxProse = Math.max(maxProse, renderedLineLength(line));
-    }
-  }
+  const { maxProse, maxBullet } = proseMetrics(description);
   // Prose walls live in paragraphs (≤400); bullets carry identifiers (≤600);
   // fenced commands/logs are exempt.
   return {
@@ -220,7 +200,7 @@ export function scoreDescription(
   const checks: RubricCheck[] = [
     checkOpener(firstLine(description), title),
     checkSummary(summarySlice(description)),
-    checkChanges(sectionSlice(description, "Changes"), opts),
+    checkChanges(sliceSection(description, /^## Changes/im), opts),
     checkAnchors(description, opts),
     checkTesting(testingSlice(description), opts),
     checkFences((description.match(/```/g) ?? []).length, opts),

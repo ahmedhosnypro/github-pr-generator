@@ -113,6 +113,8 @@ export interface GitHubPRListItem {
 /** OpenAI-compatible chat completion response/chunk shapes. */
 interface ChatCompletionContent {
   content?: string;
+  /** Thinking-model reasoning (Gemini 3, DeepSeek-R1, …); never part of the answer. */
+  reasoning_content?: string;
 }
 
 interface ChatCompletionChoice {

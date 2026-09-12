@@ -81,3 +81,19 @@ export function settleTicks(times = 10): Promise<void> {
 export function countLogs(logs: string[], needle: string): number {
   return logs.filter((line) => line.includes(needle)).length;
 }
+
+/** Chunk texts posted on a port, in order. */
+export function chunksOn(port: FakePort): string {
+  return port.posted
+    .filter((m): m is { kind: "chunk"; text: string } => (m as { kind?: string }).kind === "chunk")
+    .map((m) => m.text)
+    .join("");
+}
+
+/** Titles carried by the "done" messages posted on a port, in order. */
+export function doneTitles(port: FakePort): string {
+  return port.posted
+    .filter((m) => (m as { kind?: string }).kind === "done")
+    .map((m) => (m as { result?: { title?: string } }).result?.title)
+    .join(",");
+}
